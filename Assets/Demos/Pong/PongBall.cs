@@ -9,6 +9,7 @@ public enum PongBallState {
 public class PongBall : MonoBehaviour
 {
     public float Speed = 1;
+    public bool Simulate = true;
 
     Vector3 Direction;
     PongBallState _State = PongBallState.Playing;
@@ -30,6 +31,10 @@ public class PongBall : MonoBehaviour
     }
 
     void Update() {
+      if (!Simulate) {
+        return;
+      }
+
       if (State != PongBallState.Playing) {
         return;
       }
@@ -38,6 +43,10 @@ public class PongBall : MonoBehaviour
     }
 
     void OnCollisionEnter(Collision c) {
+      if (!Simulate) {
+        return;
+      }
+
       switch (c.collider.name) {
         case "BoundTop":
         case "BoundBottom":
@@ -58,6 +67,15 @@ public class PongBall : MonoBehaviour
           break;
 
       }
+    }
+
+    public void SetSimulate(bool simulate) {
+      Simulate = simulate;
+    }
+
+    public void ApplyNetworkState(Vector3 position, PongBallState state) {
+      transform.position = position;
+      _State = state;
     }
 
 }
