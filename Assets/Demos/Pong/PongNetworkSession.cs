@@ -43,6 +43,8 @@ public class PongNetworkSession : MonoBehaviour
     bool matchActive;
     string statusMessage = "";
     int statesReceived;
+    int joinPacketsSent;
+    bool hostResponded;
 
     IPEndPoint clientEndpoint;
 
@@ -221,12 +223,14 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        GUILayout.BeginArea(new Rect(10, 10, 380, 300), GUI.skin.box);
+        GUILayout.BeginArea(new Rect(10, 10, 420, 360), GUI.skin.box);
         GUILayout.Label("Pong Self-Host UDP");
         GUILayout.Label("Mode: " + mode);
 
         if (mode == NetMode.Offline)
         {
+            GUILayout.Label("2 PC: meme Wi-Fi/box, IP LAN du host, pare-feu UDP " + DefaultPort + " entrant sur le host.");
+
             foreach (string ip in GetLocalIPv4Addresses())
             {
                 GUILayout.Label("IP host possible: " + ip);
@@ -259,6 +263,7 @@ public class PongNetworkSession : MonoBehaviour
             if (mode == NetMode.Host)
             {
                 GUILayout.Label("Ecoute UDP: " + (udp.IsBound ? "OUI" : "NON") + " | Port: " + port);
+                GUILayout.Label("Pare-feu Windows: autoriser UDP entrant port " + port + " sur CE PC.");
                 foreach (string ip in GetLocalIPv4Addresses())
                 {
                     GUILayout.Label("IP a donner au client: " + ip);
@@ -279,9 +284,19 @@ public class PongNetworkSession : MonoBehaviour
                 GUILayout.Label(statusMessage);
             }
 
-            GUILayout.Label(mode == NetMode.Host
-                ? ("Client: " + (clientEndpoint != null ? "OUI" : "NON"))
-                : ("UDP actif | Etats: " + statesReceived));
+            if (mode == NetMode.Host)
+            {
+                GUILayout.Label("Client: " + (clientEndpoint != null ? "OUI" : "NON"));
+                if (clientEndpoint != null)
+                {
+                    GUILayout.Label("Endpoint client: " + clientEndpoint);
+                }
+            }
+            else
+            {
+                GUILayout.Label("Join envoyes: " + joinPacketsSent + " | Host repondu: " + (hostResponded ? "OUI" : "NON"));
+                GUILayout.Label("Etats recus: " + statesReceived);
+            }
 
             if (GUILayout.Button("Disconnect"))
             {
@@ -315,9 +330,25 @@ public class PongNetworkSession : MonoBehaviour
 
     void StartClient()
     {
+        remoteIp = remoteIp != null ? remoteIp.Trim() : "";
+
+        if (!IPAddress.TryParse(remoteIp, out _))
+        {
+            statusMessage = "IP invalide: " + remoteIp;
+            return;
+        }
+
+        if (remoteIp == "127.0.0.1")
+        {
+            statusMessage = "127.0.0.1 = local seulement. Sur 2 PC, mets l'IP LAN du host.";
+        }
+
         ShutdownNetwork();
         clientEndpoint = null;
         lastClientPacketAt = Time.time;
+        joinPacketsSent = 0;
+        hostResponded = false;
+        statesReceived = 0;
 
         bool ok = udp.Bind(0, OnClientMessage);
         if (!ok)
@@ -337,6 +368,7 @@ public class PongNetworkSession : MonoBehaviour
     void SendJoinPacket()
     {
         udp.Send("J\n", remoteIp, port);
+        joinPacketsSent++;
         lastInputSentAt = Time.time;
     }
 
@@ -620,7 +652,21 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        if (message.StartsWith("J", StringComparison.Ordinal) || message.StartsWith("I|", StringComparison.Ordinal))
+        if (message.StartsWith("J", StringComparison.Ordinal))
+        {
+            udp.Send("A\n", from);
+
+            if (!matchActive)
+            {
+                matchActive = true;
+                statusMessage = "Adversaire connecte. C'est parti !";
+                ResetMatch(sendToClient: true);
+            }
+
+            return;
+        }
+
+        if (message.StartsWith("I|", StringComparison.Ordinal))
         {
             if (!matchActive)
             {
@@ -655,6 +701,13 @@ public class PongNetworkSession : MonoBehaviour
         }
 
         lastClientPacketAt = Time.time;
+
+        if (message.StartsWith("A", StringComparison.Ordinal))
+        {
+            hostResponded = true;
+            statusMessage = "Host joignable. Attente demarrage partie...";
+            return;
+        }
 
         if (message.StartsWith("R", StringComparison.Ordinal))
         {
