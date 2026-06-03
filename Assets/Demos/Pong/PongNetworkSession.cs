@@ -1,5 +1,8 @@
 using System;
 using System.Globalization;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
@@ -31,6 +34,7 @@ public class PongNetworkSession : MonoBehaviour
     float lastSendAt;
     float remoteClientInput;
     bool hasClient;
+    string statusMessage = "";
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
@@ -136,18 +140,24 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        GUILayout.BeginArea(new Rect(10, 10, 280, 180), GUI.skin.box);
+        GUILayout.BeginArea(new Rect(10, 10, 320, 220), GUI.skin.box);
         GUILayout.Label("Pong Self-Host TCP");
         GUILayout.Label("Mode: " + mode);
 
         if (mode == NetMode.Offline)
         {
+            GUILayout.Label("Host IP (LAN): " + GetLocalIPv4());
             GUILayout.BeginHorizontal();
             GUILayout.Label("IP", GUILayout.Width(30));
             remoteIp = GUILayout.TextField(remoteIp, GUILayout.Width(120));
             GUILayout.Label("Port", GUILayout.Width(40));
             int.TryParse(GUILayout.TextField(port.ToString(), GUILayout.Width(70)), out port);
             GUILayout.EndHorizontal();
+
+            if (!string.IsNullOrEmpty(statusMessage))
+            {
+                GUILayout.Label(statusMessage);
+            }
 
             if (GUILayout.Button("Start Host"))
             {
@@ -188,6 +198,7 @@ public class PongNetworkSession : MonoBehaviour
 
         hasClient = false;
         remoteClientInput = 0f;
+        statusMessage = "Host actif sur " + GetLocalIPv4() + ":" + port;
         ConfigureForMode(NetMode.Host);
     }
 
@@ -199,11 +210,40 @@ public class PongNetworkSession : MonoBehaviour
         bool ok = client.Connect(OnClientMessage);
         if (!ok)
         {
+            statusMessage = "Connexion refusee vers " + remoteIp + ":" + port
+                + ". Verifie que le host est lance et le pare-feu ouvert.";
             ConfigureForMode(NetMode.Offline);
             return;
         }
 
+        statusMessage = "Connecte a " + remoteIp + ":" + port;
         ConfigureForMode(NetMode.Client);
+    }
+
+    static string GetLocalIPv4()
+    {
+        foreach (NetworkInterface networkInterface in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (networkInterface.OperationalStatus != OperationalStatus.Up)
+            {
+                continue;
+            }
+
+            if (networkInterface.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+            {
+                continue;
+            }
+
+            foreach (UnicastIPAddressInformation address in networkInterface.GetIPProperties().UnicastAddresses)
+            {
+                if (address.Address.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    return address.Address.ToString();
+                }
+            }
+        }
+
+        return "IP introuvable";
     }
 
     void StopSession()
