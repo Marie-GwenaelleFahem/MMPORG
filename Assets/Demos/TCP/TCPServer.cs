@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Collections.Generic;
 
+[DefaultExecutionOrder(-50)]
 public class TCPServer : MonoBehaviour
 {
     public int ListenPort = 25000;
@@ -14,23 +15,29 @@ public class TCPServer : MonoBehaviour
     public delegate void TCPMessageReceive(string message);
 
     private TCPMessageReceive OnMessageReceive;
+    private string receiveBuffer = "";
 
     private List<TcpClient> Connections = new List<TcpClient>();
+
+    public string LastError { get; private set; } = "";
 
     public bool Listen(TCPMessageReceive handler) {
         if (tcp != null) {
             Debug.LogWarning("Socket already initialized! Close it first.");
+            LastError = "Serveur deja actif.";
             return false;
         }
         try {
+            LastError = "";
             tcp = new TcpListener(IPAddress.Any, ListenPort);
             tcp.Start();
-            Debug.Log("Server listening on port: " + ListenPort);
+            Debug.Log("Host en ecoute sur le port " + ListenPort + " (toutes les interfaces reseau).");
             OnMessageReceive = handler;
             return true;
         } catch (System.Exception ex)
         {
-            Debug.LogWarning("Error creating TCP listener: " + ex.Message);
+            LastError = ex.Message;
+            Debug.LogWarning("Error creating TCP listener on port " + ListenPort + ": " + ex.Message);
             CloseTCP();
             return false;
         }
@@ -77,8 +84,10 @@ public class TCPServer : MonoBehaviour
         }
 
         try {
-            client.GetStream().Write(bytes, 0, bytes.Length);            
-        } catch (SocketException e)
+            NetworkStream stream = client.GetStream();
+            stream.Write(bytes, 0, bytes.Length);
+            stream.Flush();
+        } catch (System.Exception e)
         {
             Debug.LogWarning(e.Message);
         }
@@ -97,42 +106,59 @@ public class TCPServer : MonoBehaviour
         if (tcp == null) { return; }
 
         while (tcp.Pending()) {
-            TcpClient tcpClient = tcp.AcceptTcpClient();       
+            TcpClient tcpClient = tcp.AcceptTcpClient();
+            tcpClient.NoDelay = true;
             Debug.Log("New connection received from: " + ((IPEndPoint)tcpClient.Client.RemoteEndPoint).Address);
             Connections.Add(tcpClient);
 
             // Welcome message
-            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(OnConnectionMessage);
-            SendTCPBytes(tcpClient, bytes);
+            if (!string.IsNullOrEmpty(OnConnectionMessage))
+            {
+                byte[] bytes = System.Text.Encoding.UTF8.GetBytes(OnConnectionMessage + "\n");
+                SendTCPBytes(tcpClient, bytes);
+            }
         }
 
-        foreach (TcpClient client in Connections) {
-            if (!client.Connected) {
-                Debug.Log("Client disconnected");
-                Connections.Remove(client);
-                return;
-            }
+        foreach (TcpClient client in GetConnectionSnapshot()) {
+            try {
+                NetworkStream stream = client.GetStream();
+                while (stream.DataAvailable)
+                {   
+                    byte[] data = new byte[client.Available];
+                    stream.Read(data, 0, data.Length);
 
-            while (client.Available > 0)
-            {   
-                byte[] data = new byte[client.Available];
-                client.GetStream().Read(data, 0, client.Available);
-
-                try
-                {
                     ParseString(data);
                 }
-                catch (System.Exception ex)
-                {
-                    Debug.LogWarning("Error receiving TCP message: " + ex.Message);
-                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning("Client disconnected: " + ex.Message);
+                Connections.Remove(client);
             }
         }
     }
 
+    List<TcpClient> GetConnectionSnapshot()
+    {
+        return new List<TcpClient>(Connections);
+    }
+
     private void ParseString(byte[] bytes) {
-        string message = System.Text.Encoding.UTF8.GetString(bytes);
-        OnMessageReceive.Invoke(message);
+        receiveBuffer += System.Text.Encoding.UTF8.GetString(bytes);
+
+        int newlineIndex;
+        while ((newlineIndex = receiveBuffer.IndexOf('\n')) >= 0)
+        {
+            string message = receiveBuffer.Substring(0, newlineIndex).Trim('\r', ' ', '\t');
+            receiveBuffer = receiveBuffer.Substring(newlineIndex + 1);
+
+            if (OnMessageReceive == null || string.IsNullOrEmpty(message))
+            {
+                continue;
+            }
+
+            OnMessageReceive.Invoke(message);
+        }
     }
 
     private void CloseTCP() {
@@ -141,6 +167,7 @@ public class TCPServer : MonoBehaviour
             tcp = null;            
         }
         Connections.Clear();
+        receiveBuffer = "";
         OnMessageReceive = null;
     }
 

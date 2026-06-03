@@ -21,6 +21,15 @@ public class PongWinUI : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
+        if (Ball == null)
+        {
+            Ball = GameObject.FindFirstObjectByType<PongBall>();
+            if (Ball == null)
+            {
+                return;
+            }
+        }
+
         switch (Ball.State) {
           case PongBallState.Playing:
             Panel.SetActive(false);
@@ -38,6 +47,12 @@ public class PongWinUI : MonoBehaviour
     }
 
     public void OnReplay() {
+      if (PongNetworkSession.Instance != null && PongNetworkSession.Instance.IsNetworkSession)
+      {
+        PongNetworkSession.Instance.RequestReplay();
+        return;
+      }
+
       SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 }

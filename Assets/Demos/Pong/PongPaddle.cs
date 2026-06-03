@@ -17,9 +17,24 @@ public class PongPaddle : MonoBehaviour
     InputAction PlayerAction;
 
 
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
-    void Start()
+    void Awake()
     {
+        EnsureInputReady();
+    }
+
+    void OnEnable()
+    {
+        EnsureInputReady();
+        PlayerAction?.Enable();
+    }
+
+    void EnsureInputReady()
+    {
+        if (inputActions != null)
+        {
+            return;
+        }
+
         inputActions = new PongInput();
         switch (Player) {
           case PongPlayer.PlayerLeft:
@@ -29,13 +44,21 @@ public class PongPaddle : MonoBehaviour
             PlayerAction = inputActions.Pong.Player2;
             break;
         }
-
-        PlayerAction.Enable();
     }
 
     // Update is called once per frame
     void Update()
     {
+      if (PlayerAction == null)
+      {
+        return;
+      }
+
+      if (PongNetworkSession.Instance != null && !PongNetworkSession.Instance.CanMovePaddle(Player))
+      {
+        return;
+      }
+
       float direction = PlayerAction.ReadValue<float>();
 
       Vector3 newPos = transform.position + (Vector3.up * Speed * direction * Time.deltaTime);
@@ -45,6 +68,6 @@ public class PongPaddle : MonoBehaviour
     }
 
     void OnDisable() {
-      PlayerAction.Disable();
+      PlayerAction?.Disable();
     }
 }

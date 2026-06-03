@@ -2,6 +2,7 @@ using UnityEngine;
 using System.Net;
 using System.Net.Sockets;
 
+[DefaultExecutionOrder(-50)]
 public class TCPClient : MonoBehaviour
 {
     public int DestinationPort = 25000;
@@ -13,7 +14,9 @@ public class TCPClient : MonoBehaviour
     public delegate void TCPMessageReceive(string message);
 
     private TCPMessageReceive OnMessageReceive;
+    private string receiveBuffer = "";
 
+    public string LastError { get; private set; } = "";
 
     public bool Connect(TCPMessageReceive handler) {
         if (tcp != null) {
@@ -21,13 +24,16 @@ public class TCPClient : MonoBehaviour
             return false;
         }
         try {
+            LastError = "";
             tcp = new TcpClient();
+            tcp.NoDelay = true;
             tcp.Connect(DestinationIP, DestinationPort);
             OnMessageReceive = handler;
             return true;
         } catch (System.Exception ex)
         {
-            Debug.LogWarning("Error creating connection: " + ex.Message);
+            LastError = ex.Message;
+            Debug.LogWarning("Error creating connection to " + DestinationIP + ":" + DestinationPort + " -> " + ex.Message);
             CloseTCP();
             return false;
         }
@@ -55,8 +61,10 @@ public class TCPClient : MonoBehaviour
         }
 
         try {
-            tcp.GetStream().Write(bytes, 0, bytes.Length);            
-        } catch (SocketException e)
+            NetworkStream stream = tcp.GetStream();
+            stream.Write(bytes, 0, bytes.Length);
+            stream.Flush();
+        } catch (System.Exception e)
         {
             Debug.LogWarning(e.Message);
         }
@@ -74,25 +82,38 @@ public class TCPClient : MonoBehaviour
     private void ReceiveTCP() {
         if (tcp == null) { return; }
 
-        while (tcp.Available > 0)
-		{   
-            byte[] data = new byte[tcp.Available];
-			tcp.GetStream().Read(data, 0, tcp.Available);
-
-			try
-			{
-				ParseString(data);
-			}
-			catch (System.Exception ex)
-			{
-				Debug.LogWarning("Error receiving TCP message: " + ex.Message);
-			}
-		}
+        try {
+            NetworkStream stream = tcp.GetStream();
+            while (stream.DataAvailable)
+            {   
+                byte[] data = new byte[tcp.Available];
+                stream.Read(data, 0, data.Length);
+                ParseString(data);
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning("Error receiving TCP message: " + ex.Message);
+            CloseTCP();
+        }
     }
 
     private void ParseString(byte[] bytes) {
-        string message = System.Text.Encoding.UTF8.GetString(bytes);
-        OnMessageReceive.Invoke(message);
+        receiveBuffer += System.Text.Encoding.UTF8.GetString(bytes);
+
+        int newlineIndex;
+        while ((newlineIndex = receiveBuffer.IndexOf('\n')) >= 0)
+        {
+            string message = receiveBuffer.Substring(0, newlineIndex).Trim('\r', ' ', '\t');
+            receiveBuffer = receiveBuffer.Substring(newlineIndex + 1);
+
+            if (OnMessageReceive == null || string.IsNullOrEmpty(message))
+            {
+                continue;
+            }
+
+            OnMessageReceive.Invoke(message);
+        }
     }
 
     private void CloseTCP() {
@@ -100,6 +121,7 @@ public class TCPClient : MonoBehaviour
             tcp.Close();
             tcp = null;            
         }
+        receiveBuffer = "";
         OnMessageReceive = null;
     }
 
