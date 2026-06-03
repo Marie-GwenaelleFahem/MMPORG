@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -19,14 +20,14 @@ public class PongNetworkSession : MonoBehaviour
 
     const int DefaultPort = 25000;
     const float SendInterval = 0.02f;
+    const float ClientTimeout = 3f;
 
     static PongNetworkSession _instance;
 
     public static PongNetworkSession Instance => _instance;
     public bool IsNetworkSession => mode != NetMode.Offline;
 
-    TCPServer server;
-    TCPClient client;
+    UDPService udp;
 
     PongPaddle paddleLeft;
     PongPaddle paddleRight;
@@ -37,11 +38,13 @@ public class PongNetworkSession : MonoBehaviour
     int port = DefaultPort;
     float lastInputSentAt;
     float lastStateSentAt;
+    float lastClientPacketAt;
     float remoteClientInput;
-    bool hasClient;
     bool matchActive;
     string statusMessage = "";
     int statesReceived;
+
+    IPEndPoint clientEndpoint;
 
     public bool CanMovePaddle(PongPlayer player)
     {
@@ -56,6 +59,12 @@ public class PongNetworkSession : MonoBehaviour
         }
 
         return mode == NetMode.Host && player == PongPlayer.PlayerLeft;
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    static void EnableRunInBackground()
+    {
+        Application.runInBackground = true;
     }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -85,11 +94,7 @@ public class PongNetworkSession : MonoBehaviour
 
         _instance = this;
         DontDestroyOnLoad(gameObject);
-        server = gameObject.AddComponent<TCPServer>();
-        client = gameObject.AddComponent<TCPClient>();
-        server.ListenPort = port;
-        client.DestinationPort = port;
-        client.DestinationIP = remoteIp;
+        udp = gameObject.AddComponent<UDPService>();
         SceneManager.sceneLoaded += OnSceneLoaded;
         CacheSceneRefs();
         ConfigureForMode(NetMode.Offline);
@@ -133,15 +138,16 @@ public class PongNetworkSession : MonoBehaviour
         }
         else if (mode == NetMode.Client)
         {
-            if (!client.IsConnected)
+            if (!udp.IsBound)
             {
-                if (matchActive)
-                {
-                    matchActive = false;
-                    ApplyGameplayForCurrentMode();
-                    statusMessage = "Deconnecte du host.";
-                }
                 return;
+            }
+
+            if (matchActive && Time.time - lastClientPacketAt > ClientTimeout)
+            {
+                matchActive = false;
+                ApplyGameplayForCurrentMode();
+                statusMessage = "Deconnecte du host.";
             }
 
             SendClientInput();
@@ -166,14 +172,20 @@ public class PongNetworkSession : MonoBehaviour
         }
 
         Vector3 rightPos = paddleRight.transform.position;
-        rightPos.y = Mathf.Clamp(rightPos.y + remoteClientInput * paddleRight.Speed * Time.deltaTime, paddleRight.MinY, paddleRight.MaxY);
+        rightPos.y = Mathf.Clamp(
+            rightPos.y + remoteClientInput * paddleRight.Speed * Time.deltaTime,
+            paddleRight.MinY,
+            paddleRight.MaxY);
         paddleRight.transform.position = rightPos;
         BroadcastState();
     }
 
     void UpdateHostMatchState()
     {
-        bool opponentConnected = server.IsListening && server.ConnectionCount >= 1;
+        bool opponentConnected = udp.IsBound
+            && clientEndpoint != null
+            && Time.time - lastClientPacketAt <= ClientTimeout;
+
         if (opponentConnected == matchActive)
         {
             return;
@@ -209,8 +221,8 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        GUILayout.BeginArea(new Rect(10, 10, 360, 280), GUI.skin.box);
-        GUILayout.Label("Pong Self-Host TCP");
+        GUILayout.BeginArea(new Rect(10, 10, 380, 300), GUI.skin.box);
+        GUILayout.Label("Pong Self-Host UDP");
         GUILayout.Label("Mode: " + mode);
 
         if (mode == NetMode.Offline)
@@ -219,6 +231,7 @@ public class PongNetworkSession : MonoBehaviour
             {
                 GUILayout.Label("IP host possible: " + ip);
             }
+
             GUILayout.BeginHorizontal();
             GUILayout.Label("IP", GUILayout.Width(30));
             remoteIp = GUILayout.TextField(remoteIp, GUILayout.Width(120));
@@ -245,7 +258,7 @@ public class PongNetworkSession : MonoBehaviour
         {
             if (mode == NetMode.Host)
             {
-                GUILayout.Label("Ecoute: " + (server.IsListening ? "OUI" : "NON") + " | Port: " + port);
+                GUILayout.Label("Ecoute UDP: " + (udp.IsBound ? "OUI" : "NON") + " | Port: " + port);
                 foreach (string ip in GetLocalIPv4Addresses())
                 {
                     GUILayout.Label("IP a donner au client: " + ip);
@@ -267,8 +280,8 @@ public class PongNetworkSession : MonoBehaviour
             }
 
             GUILayout.Label(mode == NetMode.Host
-                ? ("Clients: " + server.ConnectionCount)
-                : ("Connected: " + client.IsConnected + " | Etats: " + statesReceived));
+                ? ("Client: " + (clientEndpoint != null ? "OUI" : "NON"))
+                : ("UDP actif | Etats: " + statesReceived));
 
             if (GUILayout.Button("Disconnect"))
             {
@@ -282,42 +295,49 @@ public class PongNetworkSession : MonoBehaviour
     void StartHost()
     {
         ShutdownNetwork();
-        server.ListenPort = port;
-        server.OnConnectionMessage = "";
-        bool ok = server.Listen(OnServerMessage);
+        clientEndpoint = null;
+        lastClientPacketAt = 0f;
+
+        bool ok = udp.Bind(port, OnHostMessage);
         if (!ok)
         {
-            statusMessage = "Echec Start Host sur port " + port + ": "
-                + (string.IsNullOrEmpty(server.LastError) ? "port deja utilise ?" : server.LastError);
+            statusMessage = "Echec Start Host UDP port " + port + ": "
+                + (string.IsNullOrEmpty(udp.LastError) ? "port deja utilise ?" : udp.LastError);
             ConfigureForMode(NetMode.Offline);
             return;
         }
 
-        hasClient = false;
         remoteClientInput = 0f;
         matchActive = false;
-        statusMessage = "Host pret. Donne une IP ci-dessus au client.";
+        statusMessage = "Host UDP pret. Donne une IP au client.";
         ConfigureForMode(NetMode.Host);
     }
 
     void StartClient()
     {
         ShutdownNetwork();
-        client.DestinationIP = remoteIp;
-        client.DestinationPort = port;
-        bool ok = client.Connect(OnClientMessage);
+        clientEndpoint = null;
+        lastClientPacketAt = Time.time;
+
+        bool ok = udp.Bind(0, OnClientMessage);
         if (!ok)
         {
-            statusMessage = "Connexion refusee vers " + remoteIp + ":" + port + ". "
-                + "Le host ecoute ? Bonne IP ? Pare-feu ouvert ?";
+            statusMessage = "Echec bind UDP client: " + udp.LastError;
             ConfigureForMode(NetMode.Offline);
             return;
         }
 
-        statusMessage = "Connecte a " + remoteIp + ":" + port + " - en attente du host";
+        SendJoinPacket();
+        statusMessage = "Client UDP vers " + remoteIp + ":" + port;
         matchActive = false;
         statesReceived = 0;
         ConfigureForMode(NetMode.Client);
+    }
+
+    void SendJoinPacket()
+    {
+        udp.Send("J\n", remoteIp, port);
+        lastInputSentAt = Time.time;
     }
 
     public void RequestReplay()
@@ -328,9 +348,9 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        if (mode == NetMode.Client && client.IsConnected)
+        if (mode == NetMode.Client && udp.IsBound)
         {
-            client.SendTCPMessage("R\n");
+            udp.Send("R\n", remoteIp, port);
         }
     }
 
@@ -349,13 +369,13 @@ public class PongNetworkSession : MonoBehaviour
         ResetPaddlePositions();
         remoteClientInput = 0f;
         matchActive = mode == NetMode.Offline
-            || (mode == NetMode.Host && server.ConnectionCount >= 1)
-            || (mode == NetMode.Client && client.IsConnected);
+            || (mode == NetMode.Host && clientEndpoint != null)
+            || (mode == NetMode.Client && udp.IsBound);
         ApplyGameplayForCurrentMode();
 
-        if (sendToClient && mode == NetMode.Host && server.IsListening)
+        if (sendToClient && mode == NetMode.Host && clientEndpoint != null)
         {
-            server.BroadcastTCPMessage("R\n");
+            udp.Send("R\n", clientEndpoint);
             BroadcastState(force: true);
         }
     }
@@ -373,8 +393,8 @@ public class PongNetworkSession : MonoBehaviour
 
     static string[] GetLocalIPv4Addresses()
     {
-        var preferred = new System.Collections.Generic.List<string>();
-        var others = new System.Collections.Generic.List<string>();
+        var preferred = new List<string>();
+        var others = new List<string>();
 
         foreach (NetworkInterface networkInterface in NetworkInterface.GetAllNetworkInterfaces())
         {
@@ -429,19 +449,15 @@ public class PongNetworkSession : MonoBehaviour
     {
         ShutdownNetwork();
         matchActive = false;
+        clientEndpoint = null;
         ConfigureForMode(NetMode.Offline);
     }
 
     void ShutdownNetwork()
     {
-        if (server != null && server.IsListening)
+        if (udp != null && udp.IsBound)
         {
-            server.Close();
-        }
-
-        if (client != null && client.IsConnected)
-        {
-            client.Close();
+            udp.Close();
         }
     }
 
@@ -519,13 +535,19 @@ public class PongNetworkSession : MonoBehaviour
 
     void SendClientInput()
     {
-        if (!client.IsConnected)
+        if (!udp.IsBound)
         {
             return;
         }
 
         if (Time.time - lastInputSentAt < SendInterval)
         {
+            return;
+        }
+
+        if (!matchActive)
+        {
+            SendJoinPacket();
             return;
         }
 
@@ -542,13 +564,13 @@ public class PongNetworkSession : MonoBehaviour
             }
         }
 
-        client.SendTCPMessage("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n");
+        udp.Send("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n", remoteIp, port);
         lastInputSentAt = Time.time;
     }
 
     void BroadcastState(bool force = false)
     {
-        if (!server.IsListening || !HasSceneRefs() || !matchActive)
+        if (!udp.IsBound || !HasSceneRefs() || !matchActive || clientEndpoint == null)
         {
             return;
         }
@@ -568,16 +590,29 @@ public class PongNetworkSession : MonoBehaviour
             ((int)ball.State).ToString(CultureInfo.InvariantCulture)
         }) + "\n";
 
-        server.BroadcastTCPMessage(message);
+        udp.Send(message, clientEndpoint);
         lastStateSentAt = Time.time;
     }
 
-    void OnServerMessage(string message)
+    void RegisterClient(IPEndPoint from)
+    {
+        if (from == null)
+        {
+            return;
+        }
+
+        clientEndpoint = from;
+        lastClientPacketAt = Time.time;
+    }
+
+    void OnHostMessage(string message, IPEndPoint from)
     {
         if (string.IsNullOrEmpty(message))
         {
             return;
         }
+
+        RegisterClient(from);
 
         if (message.StartsWith("R", StringComparison.Ordinal))
         {
@@ -585,12 +620,20 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
+        if (message.StartsWith("J", StringComparison.Ordinal) || message.StartsWith("I|", StringComparison.Ordinal))
+        {
+            if (!matchActive)
+            {
+                matchActive = true;
+                statusMessage = "Adversaire connecte. C'est parti !";
+                ResetMatch(sendToClient: true);
+            }
+        }
+
         if (!message.StartsWith("I|", StringComparison.Ordinal))
         {
             return;
         }
-
-        hasClient = true;
 
         string[] parts = message.Split('|');
         if (parts.Length < 2)
@@ -604,14 +647,14 @@ public class PongNetworkSession : MonoBehaviour
         }
     }
 
-    void OnClientMessage(string message)
+    void OnClientMessage(string message, IPEndPoint from)
     {
         if (string.IsNullOrEmpty(message))
         {
             return;
         }
 
-        message = message.Trim('\r', ' ', '\t');
+        lastClientPacketAt = Time.time;
 
         if (message.StartsWith("R", StringComparison.Ordinal))
         {
