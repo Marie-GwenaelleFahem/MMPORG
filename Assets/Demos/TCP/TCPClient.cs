@@ -13,6 +13,7 @@ public class TCPClient : MonoBehaviour
     public delegate void TCPMessageReceive(string message);
 
     private TCPMessageReceive OnMessageReceive;
+    private string receiveBuffer = "";
 
 
     public bool Connect(TCPMessageReceive handler) {
@@ -91,8 +92,21 @@ public class TCPClient : MonoBehaviour
     }
 
     private void ParseString(byte[] bytes) {
-        string message = System.Text.Encoding.UTF8.GetString(bytes);
-        OnMessageReceive.Invoke(message);
+        receiveBuffer += System.Text.Encoding.UTF8.GetString(bytes);
+
+        int newlineIndex;
+        while ((newlineIndex = receiveBuffer.IndexOf('\n')) >= 0)
+        {
+            string message = receiveBuffer.Substring(0, newlineIndex);
+            receiveBuffer = receiveBuffer.Substring(newlineIndex + 1);
+
+            if (OnMessageReceive == null || string.IsNullOrEmpty(message))
+            {
+                continue;
+            }
+
+            OnMessageReceive.Invoke(message);
+        }
     }
 
     private void CloseTCP() {
@@ -100,6 +114,7 @@ public class TCPClient : MonoBehaviour
             tcp.Close();
             tcp = null;            
         }
+        receiveBuffer = "";
         OnMessageReceive = null;
     }
 
