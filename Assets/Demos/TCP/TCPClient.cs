@@ -15,6 +15,7 @@ public class TCPClient : MonoBehaviour
     private TCPMessageReceive OnMessageReceive;
     private string receiveBuffer = "";
 
+    public string LastError { get; private set; } = "";
 
     public bool Connect(TCPMessageReceive handler) {
         if (tcp != null) {
@@ -22,13 +23,15 @@ public class TCPClient : MonoBehaviour
             return false;
         }
         try {
+            LastError = "";
             tcp = new TcpClient();
             tcp.Connect(DestinationIP, DestinationPort);
             OnMessageReceive = handler;
             return true;
         } catch (System.Exception ex)
         {
-            Debug.LogWarning("Error creating connection: " + ex.Message);
+            LastError = ex.Message;
+            Debug.LogWarning("Error creating connection to " + DestinationIP + ":" + DestinationPort + " -> " + ex.Message);
             CloseTCP();
             return false;
         }
