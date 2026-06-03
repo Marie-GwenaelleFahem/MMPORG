@@ -209,13 +209,16 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        GUILayout.BeginArea(new Rect(10, 10, 320, 220), GUI.skin.box);
+        GUILayout.BeginArea(new Rect(10, 10, 360, 280), GUI.skin.box);
         GUILayout.Label("Pong Self-Host TCP");
         GUILayout.Label("Mode: " + mode);
 
         if (mode == NetMode.Offline)
         {
-            GUILayout.Label("Host IP (LAN): " + GetLocalIPv4());
+            foreach (string ip in GetLocalIPv4Addresses())
+            {
+                GUILayout.Label("IP host possible: " + ip);
+            }
             GUILayout.BeginHorizontal();
             GUILayout.Label("IP", GUILayout.Width(30));
             remoteIp = GUILayout.TextField(remoteIp, GUILayout.Width(120));
@@ -240,6 +243,15 @@ public class PongNetworkSession : MonoBehaviour
         }
         else
         {
+            if (mode == NetMode.Host)
+            {
+                GUILayout.Label("Ecoute: " + (server.IsListening ? "OUI" : "NON") + " | Port: " + port);
+                foreach (string ip in GetLocalIPv4Addresses())
+                {
+                    GUILayout.Label("IP a donner au client: " + ip);
+                }
+            }
+
             if (mode == NetMode.Host && !matchActive)
             {
                 GUILayout.Label("En attente d'un client...");
@@ -275,6 +287,8 @@ public class PongNetworkSession : MonoBehaviour
         bool ok = server.Listen(OnServerMessage);
         if (!ok)
         {
+            statusMessage = "Echec Start Host sur port " + port + ": "
+                + (string.IsNullOrEmpty(server.LastError) ? "port deja utilise ?" : server.LastError);
             ConfigureForMode(NetMode.Offline);
             return;
         }
@@ -282,7 +296,7 @@ public class PongNetworkSession : MonoBehaviour
         hasClient = false;
         remoteClientInput = 0f;
         matchActive = false;
-        statusMessage = "Host actif sur " + GetLocalIPv4() + ":" + port + " - en attente client";
+        statusMessage = "Host pret. Donne une IP ci-dessus au client.";
         ConfigureForMode(NetMode.Host);
     }
 
@@ -294,8 +308,8 @@ public class PongNetworkSession : MonoBehaviour
         bool ok = client.Connect(OnClientMessage);
         if (!ok)
         {
-            statusMessage = "Connexion refusee vers " + remoteIp + ":" + port
-                + ". Verifie que le host est lance et le pare-feu ouvert.";
+            statusMessage = "Connexion refusee vers " + remoteIp + ":" + port + ". "
+                + "Le host ecoute ? Bonne IP ? Pare-feu ouvert ?";
             ConfigureForMode(NetMode.Offline);
             return;
         }
@@ -357,8 +371,11 @@ public class PongNetworkSession : MonoBehaviour
         paddleRight.transform.position = rightPos;
     }
 
-    static string GetLocalIPv4()
+    static string[] GetLocalIPv4Addresses()
     {
+        var preferred = new System.Collections.Generic.List<string>();
+        var others = new System.Collections.Generic.List<string>();
+
         foreach (NetworkInterface networkInterface in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (networkInterface.OperationalStatus != OperationalStatus.Up)
@@ -373,14 +390,39 @@ public class PongNetworkSession : MonoBehaviour
 
             foreach (UnicastIPAddressInformation address in networkInterface.GetIPProperties().UnicastAddresses)
             {
-                if (address.Address.AddressFamily == AddressFamily.InterNetwork)
+                if (address.Address.AddressFamily != AddressFamily.InterNetwork)
                 {
-                    return address.Address.ToString();
+                    continue;
+                }
+
+                string ip = address.Address.ToString();
+                if (ip.StartsWith("169.254."))
+                {
+                    continue;
+                }
+
+                if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172."))
+                {
+                    preferred.Add(ip);
+                }
+                else
+                {
+                    others.Add(ip);
                 }
             }
         }
 
-        return "IP introuvable";
+        if (preferred.Count > 0)
+        {
+            return preferred.ToArray();
+        }
+
+        if (others.Count > 0)
+        {
+            return others.ToArray();
+        }
+
+        return new[] { "IP introuvable" };
     }
 
     void StopSession()

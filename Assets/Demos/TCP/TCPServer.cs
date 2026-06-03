@@ -19,20 +19,25 @@ public class TCPServer : MonoBehaviour
 
     private List<TcpClient> Connections = new List<TcpClient>();
 
+    public string LastError { get; private set; } = "";
+
     public bool Listen(TCPMessageReceive handler) {
         if (tcp != null) {
             Debug.LogWarning("Socket already initialized! Close it first.");
+            LastError = "Serveur deja actif.";
             return false;
         }
         try {
+            LastError = "";
             tcp = new TcpListener(IPAddress.Any, ListenPort);
             tcp.Start();
-            Debug.Log("Server listening on port: " + ListenPort);
+            Debug.Log("Host en ecoute sur le port " + ListenPort + " (toutes les interfaces reseau).");
             OnMessageReceive = handler;
             return true;
         } catch (System.Exception ex)
         {
-            Debug.LogWarning("Error creating TCP listener: " + ex.Message);
+            LastError = ex.Message;
+            Debug.LogWarning("Error creating TCP listener on port " + ListenPort + ": " + ex.Message);
             CloseTCP();
             return false;
         }
