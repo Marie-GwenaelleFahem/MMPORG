@@ -1,7 +1,5 @@
 # 🏓 MMPong - Massive Multiplayer Pong
 
-![MMPORG](https://learn.glassworks.tech/mmporg/assets/images/banner-9f57e691671d132609bfb6cdee8c8cce.png)
-
 ## Le Jeu
 
 **MMPong** est une réinvention multijoueur du classique Pong. Un jeu en temps réel où les joueurs se connectent en réseau pour contrôler collectivement les palettes et affronter l'adversaire.
