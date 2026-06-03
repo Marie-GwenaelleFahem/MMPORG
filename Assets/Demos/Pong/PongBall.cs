@@ -21,13 +21,7 @@ public class PongBall : MonoBehaviour
     } 
 
     void Start() {
-      Direction = new Vector3(
-        Random.Range(0.5f, 1),
-        Random.Range(-0.5f, 0.5f),
-        0
-      );
-      Direction.x *= Mathf.Sign(Random.Range(-100, 100));
-      Direction.Normalize();
+      ResetBall();
     }
 
     void Update() {
@@ -76,6 +70,18 @@ public class PongBall : MonoBehaviour
     public void ApplyNetworkState(Vector3 position, PongBallState state) {
       transform.position = position;
       _State = state;
+    }
+
+    public void ResetBall() {
+      transform.position = Vector3.zero;
+      _State = PongBallState.Playing;
+      Direction = new Vector3(
+        Random.Range(0.5f, 1),
+        Random.Range(-0.5f, 0.5f),
+        0
+      );
+      Direction.x *= Mathf.Sign(Random.Range(-100, 100));
+      Direction.Normalize();
     }
 
 }

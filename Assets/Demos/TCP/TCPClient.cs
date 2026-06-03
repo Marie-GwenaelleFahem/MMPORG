@@ -2,6 +2,7 @@ using UnityEngine;
 using System.Net;
 using System.Net.Sockets;
 
+[DefaultExecutionOrder(-50)]
 public class TCPClient : MonoBehaviour
 {
     public int DestinationPort = 25000;
@@ -25,6 +26,7 @@ public class TCPClient : MonoBehaviour
         try {
             LastError = "";
             tcp = new TcpClient();
+            tcp.NoDelay = true;
             tcp.Connect(DestinationIP, DestinationPort);
             OnMessageReceive = handler;
             return true;
@@ -59,8 +61,10 @@ public class TCPClient : MonoBehaviour
         }
 
         try {
-            tcp.GetStream().Write(bytes, 0, bytes.Length);            
-        } catch (SocketException e)
+            NetworkStream stream = tcp.GetStream();
+            stream.Write(bytes, 0, bytes.Length);
+            stream.Flush();
+        } catch (System.Exception e)
         {
             Debug.LogWarning(e.Message);
         }
@@ -78,20 +82,20 @@ public class TCPClient : MonoBehaviour
     private void ReceiveTCP() {
         if (tcp == null) { return; }
 
-        while (tcp.Available > 0)
-		{   
-            byte[] data = new byte[tcp.Available];
-			tcp.GetStream().Read(data, 0, tcp.Available);
-
-			try
-			{
-				ParseString(data);
-			}
-			catch (System.Exception ex)
-			{
-				Debug.LogWarning("Error receiving TCP message: " + ex.Message);
-			}
-		}
+        try {
+            NetworkStream stream = tcp.GetStream();
+            while (stream.DataAvailable)
+            {   
+                byte[] data = new byte[tcp.Available];
+                stream.Read(data, 0, data.Length);
+                ParseString(data);
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning("Error receiving TCP message: " + ex.Message);
+            CloseTCP();
+        }
     }
 
     private void ParseString(byte[] bytes) {
@@ -100,7 +104,7 @@ public class TCPClient : MonoBehaviour
         int newlineIndex;
         while ((newlineIndex = receiveBuffer.IndexOf('\n')) >= 0)
         {
-            string message = receiveBuffer.Substring(0, newlineIndex);
+            string message = receiveBuffer.Substring(0, newlineIndex).Trim('\r', ' ', '\t');
             receiveBuffer = receiveBuffer.Substring(newlineIndex + 1);
 
             if (OnMessageReceive == null || string.IsNullOrEmpty(message))

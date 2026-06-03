@@ -54,6 +54,11 @@ public class PongPaddle : MonoBehaviour
         return;
       }
 
+      if (PongNetworkSession.Instance != null && !PongNetworkSession.Instance.CanMovePaddle(Player))
+      {
+        return;
+      }
+
       float direction = PlayerAction.ReadValue<float>();
 
       Vector3 newPos = transform.position + (Vector3.up * Speed * direction * Time.deltaTime);

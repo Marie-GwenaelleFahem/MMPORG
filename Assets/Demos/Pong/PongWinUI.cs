@@ -47,6 +47,12 @@ public class PongWinUI : MonoBehaviour
     }
 
     public void OnReplay() {
+      if (PongNetworkSession.Instance != null && PongNetworkSession.Instance.IsNetworkSession)
+      {
+        PongNetworkSession.Instance.RequestReplay();
+        return;
+      }
+
       SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 }
