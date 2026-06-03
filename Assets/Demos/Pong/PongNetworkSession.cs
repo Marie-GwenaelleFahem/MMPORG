@@ -51,14 +51,42 @@ public class PongNetworkSession : MonoBehaviour
 
     void Awake()
     {
+        if (_instance != null && _instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        _instance = this;
         DontDestroyOnLoad(gameObject);
         server = gameObject.AddComponent<TCPServer>();
         client = gameObject.AddComponent<TCPClient>();
         server.ListenPort = port;
         client.DestinationPort = port;
         client.DestinationIP = remoteIp;
+        SceneManager.sceneLoaded += OnSceneLoaded;
         CacheSceneRefs();
         ConfigureForMode(NetMode.Offline);
+    }
+
+    void OnDestroy()
+    {
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+        if (_instance == this)
+        {
+            _instance = null;
+        }
+    }
+
+    void OnSceneLoaded(Scene scene, LoadSceneMode loadMode)
+    {
+        if (scene.name != "Pong")
+        {
+            return;
+        }
+
+        StopSession();
+        CacheSceneRefs();
     }
 
     void Update()
@@ -75,6 +103,11 @@ public class PongNetworkSession : MonoBehaviour
 
         if (mode == NetMode.Host)
         {
+            if (!HasSceneRefs())
+            {
+                return;
+            }
+
             Vector3 rightPos = paddleRight.transform.position;
             rightPos.y = Mathf.Clamp(rightPos.y + remoteClientInput * paddleRight.Speed * Time.deltaTime, paddleRight.MinY, paddleRight.MaxY);
             paddleRight.transform.position = rightPos;
@@ -84,6 +117,11 @@ public class PongNetworkSession : MonoBehaviour
         {
             SendClientInput();
         }
+    }
+
+    bool HasSceneRefs()
+    {
+        return paddleLeft != null && paddleRight != null && ball != null;
     }
 
     void OnDisable()
@@ -140,6 +178,7 @@ public class PongNetworkSession : MonoBehaviour
     {
         ShutdownNetwork();
         server.ListenPort = port;
+        server.OnConnectionMessage = "";
         bool ok = server.Listen(OnServerMessage);
         if (!ok)
         {
@@ -188,12 +227,15 @@ public class PongNetworkSession : MonoBehaviour
 
     void ConfigureForMode(NetMode nextMode)
     {
-        mode = nextMode;
         CacheSceneRefs();
-        if (paddleLeft == null || paddleRight == null || ball == null)
+        if (!HasSceneRefs())
         {
+            Debug.LogWarning("PongNetworkSession: scene refs missing, staying offline.");
+            mode = NetMode.Offline;
             return;
         }
+
+        mode = nextMode;
 
         switch (mode)
         {
@@ -209,7 +251,7 @@ public class PongNetworkSession : MonoBehaviour
                 break;
             case NetMode.Client:
                 paddleLeft.enabled = false;
-                paddleRight.enabled = true;
+                paddleRight.enabled = false;
                 ball.SetSimulate(false);
                 break;
         }
@@ -261,13 +303,13 @@ public class PongNetworkSession : MonoBehaviour
             }
         }
 
-        client.SendTCPMessage("I|" + axis.ToString(CultureInfo.InvariantCulture));
+        client.SendTCPMessage("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n");
         lastSendAt = Time.time;
     }
 
     void BroadcastState()
     {
-        if (!server.IsListening)
+        if (!server.IsListening || !HasSceneRefs())
         {
             return;
         }
@@ -285,7 +327,7 @@ public class PongNetworkSession : MonoBehaviour
             paddleLeft.transform.position.y.ToString("F4", CultureInfo.InvariantCulture),
             paddleRight.transform.position.y.ToString("F4", CultureInfo.InvariantCulture),
             ((int)ball.State).ToString(CultureInfo.InvariantCulture)
-        });
+        }) + "\n";
 
         server.BroadcastTCPMessage(message);
         lastSendAt = Time.time;
@@ -347,7 +389,7 @@ public class PongNetworkSession : MonoBehaviour
         if (paddleLeft == null || paddleRight == null || ball == null)
         {
             CacheSceneRefs();
-            if (paddleLeft == null || paddleRight == null || ball == null)
+            if (!HasSceneRefs())
             {
                 return;
             }

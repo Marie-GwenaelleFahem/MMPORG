@@ -14,6 +14,7 @@ public class TCPServer : MonoBehaviour
     public delegate void TCPMessageReceive(string message);
 
     private TCPMessageReceive OnMessageReceive;
+    private string receiveBuffer = "";
 
     private List<TcpClient> Connections = new List<TcpClient>();
 
@@ -102,8 +103,11 @@ public class TCPServer : MonoBehaviour
             Connections.Add(tcpClient);
 
             // Welcome message
-            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(OnConnectionMessage);
-            SendTCPBytes(tcpClient, bytes);
+            if (!string.IsNullOrEmpty(OnConnectionMessage))
+            {
+                byte[] bytes = System.Text.Encoding.UTF8.GetBytes(OnConnectionMessage + "\n");
+                SendTCPBytes(tcpClient, bytes);
+            }
         }
 
         foreach (TcpClient client in Connections) {
@@ -131,8 +135,21 @@ public class TCPServer : MonoBehaviour
     }
 
     private void ParseString(byte[] bytes) {
-        string message = System.Text.Encoding.UTF8.GetString(bytes);
-        OnMessageReceive.Invoke(message);
+        receiveBuffer += System.Text.Encoding.UTF8.GetString(bytes);
+
+        int newlineIndex;
+        while ((newlineIndex = receiveBuffer.IndexOf('\n')) >= 0)
+        {
+            string message = receiveBuffer.Substring(0, newlineIndex);
+            receiveBuffer = receiveBuffer.Substring(newlineIndex + 1);
+
+            if (OnMessageReceive == null || string.IsNullOrEmpty(message))
+            {
+                continue;
+            }
+
+            OnMessageReceive.Invoke(message);
+        }
     }
 
     private void CloseTCP() {
@@ -141,6 +158,7 @@ public class TCPServer : MonoBehaviour
             tcp = null;            
         }
         Connections.Clear();
+        receiveBuffer = "";
         OnMessageReceive = null;
     }
 
