@@ -7,6 +7,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
+[DefaultExecutionOrder(-200)]
 public class PongNetworkSession : MonoBehaviour
 {
     enum NetMode
@@ -21,6 +22,9 @@ public class PongNetworkSession : MonoBehaviour
 
     static PongNetworkSession _instance;
 
+    public static PongNetworkSession Instance => _instance;
+    public bool IsNetworkSession => mode != NetMode.Offline;
+
     TCPServer server;
     TCPClient client;
 
@@ -31,10 +35,28 @@ public class PongNetworkSession : MonoBehaviour
     NetMode mode = NetMode.Offline;
     string remoteIp = "127.0.0.1";
     int port = DefaultPort;
-    float lastSendAt;
+    float lastInputSentAt;
+    float lastStateSentAt;
     float remoteClientInput;
     bool hasClient;
+    bool matchActive;
     string statusMessage = "";
+    int statesReceived;
+
+    public bool CanMovePaddle(PongPlayer player)
+    {
+        if (mode == NetMode.Offline)
+        {
+            return true;
+        }
+
+        if (!matchActive)
+        {
+            return false;
+        }
+
+        return mode == NetMode.Host && player == PongPlayer.PlayerLeft;
+    }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
@@ -89,8 +111,8 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        StopSession();
         CacheSceneRefs();
+        ApplyGameplayForCurrentMode();
     }
 
     void Update()
@@ -107,19 +129,66 @@ public class PongNetworkSession : MonoBehaviour
 
         if (mode == NetMode.Host)
         {
-            if (!HasSceneRefs())
-            {
-                return;
-            }
-
-            Vector3 rightPos = paddleRight.transform.position;
-            rightPos.y = Mathf.Clamp(rightPos.y + remoteClientInput * paddleRight.Speed * Time.deltaTime, paddleRight.MinY, paddleRight.MaxY);
-            paddleRight.transform.position = rightPos;
-            BroadcastState();
+            UpdateHostMatchState();
         }
         else if (mode == NetMode.Client)
         {
+            if (!client.IsConnected)
+            {
+                if (matchActive)
+                {
+                    matchActive = false;
+                    ApplyGameplayForCurrentMode();
+                    statusMessage = "Deconnecte du host.";
+                }
+                return;
+            }
+
             SendClientInput();
+        }
+    }
+
+    void LateUpdate()
+    {
+        if (SceneManager.GetActiveScene().name != "Pong")
+        {
+            return;
+        }
+
+        if (paddleLeft == null || paddleRight == null || ball == null)
+        {
+            CacheSceneRefs();
+        }
+
+        if (mode != NetMode.Host || !matchActive || !HasSceneRefs())
+        {
+            return;
+        }
+
+        Vector3 rightPos = paddleRight.transform.position;
+        rightPos.y = Mathf.Clamp(rightPos.y + remoteClientInput * paddleRight.Speed * Time.deltaTime, paddleRight.MinY, paddleRight.MaxY);
+        paddleRight.transform.position = rightPos;
+        BroadcastState();
+    }
+
+    void UpdateHostMatchState()
+    {
+        bool opponentConnected = server.IsListening && server.ConnectionCount >= 1;
+        if (opponentConnected == matchActive)
+        {
+            return;
+        }
+
+        matchActive = opponentConnected;
+        if (matchActive)
+        {
+            statusMessage = "Adversaire connecte. C'est parti !";
+            ResetMatch(sendToClient: true);
+        }
+        else
+        {
+            statusMessage = "En attente d'un client...";
+            ApplyGameplayForCurrentMode();
         }
     }
 
@@ -171,9 +240,23 @@ public class PongNetworkSession : MonoBehaviour
         }
         else
         {
+            if (mode == NetMode.Host && !matchActive)
+            {
+                GUILayout.Label("En attente d'un client...");
+            }
+            else if (mode == NetMode.Client && !matchActive)
+            {
+                GUILayout.Label("Connecte. En attente du host...");
+            }
+
+            if (!string.IsNullOrEmpty(statusMessage))
+            {
+                GUILayout.Label(statusMessage);
+            }
+
             GUILayout.Label(mode == NetMode.Host
                 ? ("Clients: " + server.ConnectionCount)
-                : ("Connected: " + client.IsConnected));
+                : ("Connected: " + client.IsConnected + " | Etats: " + statesReceived));
 
             if (GUILayout.Button("Disconnect"))
             {
@@ -198,7 +281,8 @@ public class PongNetworkSession : MonoBehaviour
 
         hasClient = false;
         remoteClientInput = 0f;
-        statusMessage = "Host actif sur " + GetLocalIPv4() + ":" + port;
+        matchActive = false;
+        statusMessage = "Host actif sur " + GetLocalIPv4() + ":" + port + " - en attente client";
         ConfigureForMode(NetMode.Host);
     }
 
@@ -216,8 +300,61 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        statusMessage = "Connecte a " + remoteIp + ":" + port;
+        statusMessage = "Connecte a " + remoteIp + ":" + port + " - en attente du host";
+        matchActive = false;
+        statesReceived = 0;
         ConfigureForMode(NetMode.Client);
+    }
+
+    public void RequestReplay()
+    {
+        if (mode == NetMode.Host)
+        {
+            ResetMatch(sendToClient: true);
+            return;
+        }
+
+        if (mode == NetMode.Client && client.IsConnected)
+        {
+            client.SendTCPMessage("R\n");
+        }
+    }
+
+    void ResetMatch(bool sendToClient)
+    {
+        if (!HasSceneRefs())
+        {
+            CacheSceneRefs();
+            if (!HasSceneRefs())
+            {
+                return;
+            }
+        }
+
+        ball.ResetBall();
+        ResetPaddlePositions();
+        remoteClientInput = 0f;
+        matchActive = mode == NetMode.Offline
+            || (mode == NetMode.Host && server.ConnectionCount >= 1)
+            || (mode == NetMode.Client && client.IsConnected);
+        ApplyGameplayForCurrentMode();
+
+        if (sendToClient && mode == NetMode.Host && server.IsListening)
+        {
+            server.BroadcastTCPMessage("R\n");
+            BroadcastState(force: true);
+        }
+    }
+
+    void ResetPaddlePositions()
+    {
+        Vector3 leftPos = paddleLeft.transform.position;
+        leftPos.y = 0f;
+        paddleLeft.transform.position = leftPos;
+
+        Vector3 rightPos = paddleRight.transform.position;
+        rightPos.y = 0f;
+        paddleRight.transform.position = rightPos;
     }
 
     static string GetLocalIPv4()
@@ -249,6 +386,7 @@ public class PongNetworkSession : MonoBehaviour
     void StopSession()
     {
         ShutdownNetwork();
+        matchActive = false;
         ConfigureForMode(NetMode.Offline);
     }
 
@@ -277,6 +415,25 @@ public class PongNetworkSession : MonoBehaviour
 
         mode = nextMode;
 
+        if (mode == NetMode.Host || mode == NetMode.Client)
+        {
+            matchActive = false;
+        }
+        else
+        {
+            matchActive = true;
+        }
+
+        ApplyGameplayForCurrentMode();
+    }
+
+    void ApplyGameplayForCurrentMode()
+    {
+        if (!HasSceneRefs())
+        {
+            return;
+        }
+
         switch (mode)
         {
             case NetMode.Offline:
@@ -285,9 +442,9 @@ public class PongNetworkSession : MonoBehaviour
                 ball.SetSimulate(true);
                 break;
             case NetMode.Host:
-                paddleLeft.enabled = true;
+                paddleLeft.enabled = matchActive;
                 paddleRight.enabled = false;
-                ball.SetSimulate(true);
+                ball.SetSimulate(matchActive);
                 break;
             case NetMode.Client:
                 paddleLeft.enabled = false;
@@ -301,12 +458,12 @@ public class PongNetworkSession : MonoBehaviour
     {
         paddleLeft = FindPaddle(PongPlayer.PlayerLeft);
         paddleRight = FindPaddle(PongPlayer.PlayerRight);
-        ball = GameObject.FindFirstObjectByType<PongBall>();
+        ball = GameObject.FindFirstObjectByType<PongBall>(FindObjectsInactive.Include);
     }
 
     PongPaddle FindPaddle(PongPlayer player)
     {
-        PongPaddle[] paddles = GameObject.FindObjectsByType<PongPaddle>(FindObjectsSortMode.None);
+        PongPaddle[] paddles = GameObject.FindObjectsByType<PongPaddle>(FindObjectsInactive.Include, FindObjectsSortMode.None);
         foreach (PongPaddle paddle in paddles)
         {
             if (paddle.Player == player)
@@ -325,7 +482,7 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        if (Time.time - lastSendAt < SendInterval)
+        if (Time.time - lastInputSentAt < SendInterval)
         {
             return;
         }
@@ -344,17 +501,17 @@ public class PongNetworkSession : MonoBehaviour
         }
 
         client.SendTCPMessage("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n");
-        lastSendAt = Time.time;
+        lastInputSentAt = Time.time;
     }
 
-    void BroadcastState()
+    void BroadcastState(bool force = false)
     {
-        if (!server.IsListening || !HasSceneRefs())
+        if (!server.IsListening || !HasSceneRefs() || !matchActive)
         {
             return;
         }
 
-        if (Time.time - lastSendAt < SendInterval)
+        if (!force && Time.time - lastStateSentAt < SendInterval)
         {
             return;
         }
@@ -370,7 +527,7 @@ public class PongNetworkSession : MonoBehaviour
         }) + "\n";
 
         server.BroadcastTCPMessage(message);
-        lastSendAt = Time.time;
+        lastStateSentAt = Time.time;
     }
 
     void OnServerMessage(string message)
@@ -380,10 +537,9 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        // First message from a client is the built-in welcome exchange.
-        if (!hasClient && !message.StartsWith("I|", StringComparison.Ordinal))
+        if (message.StartsWith("R", StringComparison.Ordinal))
         {
-            hasClient = true;
+            ResetMatch(sendToClient: true);
             return;
         }
 
@@ -391,6 +547,8 @@ public class PongNetworkSession : MonoBehaviour
         {
             return;
         }
+
+        hasClient = true;
 
         string[] parts = message.Split('|');
         if (parts.Length < 2)
@@ -406,16 +564,29 @@ public class PongNetworkSession : MonoBehaviour
 
     void OnClientMessage(string message)
     {
-        if (string.IsNullOrEmpty(message) || !message.StartsWith("S|", StringComparison.Ordinal))
+        if (string.IsNullOrEmpty(message))
         {
             return;
         }
 
+        message = message.Trim('\r', ' ', '\t');
+
+        if (message.StartsWith("R", StringComparison.Ordinal))
+        {
+            matchActive = true;
+            ResetMatch(sendToClient: false);
+            return;
+        }
+
         string[] parts = message.Split('|');
-        if (parts.Length < 6)
+        if (parts.Length < 6 || parts[0] != "S")
         {
             return;
         }
+
+        matchActive = true;
+        statesReceived++;
+        statusMessage = "En jeu";
 
         if (!float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float ballX) ||
             !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float ballY) ||
@@ -423,6 +594,7 @@ public class PongNetworkSession : MonoBehaviour
             !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float rightY) ||
             !int.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out int stateInt))
         {
+            Debug.LogWarning("PongNetworkSession: invalid state message: " + message);
             return;
         }
 

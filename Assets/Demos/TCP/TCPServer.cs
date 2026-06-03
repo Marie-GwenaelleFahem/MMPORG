@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Collections.Generic;
 
+[DefaultExecutionOrder(-50)]
 public class TCPServer : MonoBehaviour
 {
     public int ListenPort = 25000;
@@ -78,8 +79,10 @@ public class TCPServer : MonoBehaviour
         }
 
         try {
-            client.GetStream().Write(bytes, 0, bytes.Length);            
-        } catch (SocketException e)
+            NetworkStream stream = client.GetStream();
+            stream.Write(bytes, 0, bytes.Length);
+            stream.Flush();
+        } catch (System.Exception e)
         {
             Debug.LogWarning(e.Message);
         }
@@ -98,7 +101,8 @@ public class TCPServer : MonoBehaviour
         if (tcp == null) { return; }
 
         while (tcp.Pending()) {
-            TcpClient tcpClient = tcp.AcceptTcpClient();       
+            TcpClient tcpClient = tcp.AcceptTcpClient();
+            tcpClient.NoDelay = true;
             Debug.Log("New connection received from: " + ((IPEndPoint)tcpClient.Client.RemoteEndPoint).Address);
             Connections.Add(tcpClient);
 
@@ -110,28 +114,28 @@ public class TCPServer : MonoBehaviour
             }
         }
 
-        foreach (TcpClient client in Connections) {
-            if (!client.Connected) {
-                Debug.Log("Client disconnected");
-                Connections.Remove(client);
-                return;
-            }
+        foreach (TcpClient client in GetConnectionSnapshot()) {
+            try {
+                NetworkStream stream = client.GetStream();
+                while (stream.DataAvailable)
+                {   
+                    byte[] data = new byte[client.Available];
+                    stream.Read(data, 0, data.Length);
 
-            while (client.Available > 0)
-            {   
-                byte[] data = new byte[client.Available];
-                client.GetStream().Read(data, 0, client.Available);
-
-                try
-                {
                     ParseString(data);
                 }
-                catch (System.Exception ex)
-                {
-                    Debug.LogWarning("Error receiving TCP message: " + ex.Message);
-                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning("Client disconnected: " + ex.Message);
+                Connections.Remove(client);
             }
         }
+    }
+
+    List<TcpClient> GetConnectionSnapshot()
+    {
+        return new List<TcpClient>(Connections);
     }
 
     private void ParseString(byte[] bytes) {
@@ -140,7 +144,7 @@ public class TCPServer : MonoBehaviour
         int newlineIndex;
         while ((newlineIndex = receiveBuffer.IndexOf('\n')) >= 0)
         {
-            string message = receiveBuffer.Substring(0, newlineIndex);
+            string message = receiveBuffer.Substring(0, newlineIndex).Trim('\r', ' ', '\t');
             receiveBuffer = receiveBuffer.Substring(newlineIndex + 1);
 
             if (OnMessageReceive == null || string.IsNullOrEmpty(message))
