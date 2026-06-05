@@ -13,10 +13,14 @@ public class PongNetworkSession : MonoBehaviour
 {
     enum NetMode
     {
+        Menu,
         Offline,
         Host,
         Client
     }
+
+    [Header("UI References")]
+    public GameObject GameGameplayUI; // Reference to the canvas or panel containing game UI (like Win/Replay)
 
     const int DefaultPort = 25000;
     const float SendInterval = 0.02f;
@@ -25,7 +29,8 @@ public class PongNetworkSession : MonoBehaviour
     static PongNetworkSession _instance;
 
     public static PongNetworkSession Instance => _instance;
-    public bool IsNetworkSession => mode != NetMode.Offline;
+    public bool IsNetworkSession => mode != NetMode.Offline && mode != NetMode.Menu;
+    public bool IsInMenu => mode == NetMode.Menu;
 
     UDPService udp;
 
@@ -39,12 +44,19 @@ public class PongNetworkSession : MonoBehaviour
     float lastInputSentAt;
     float lastStateSentAt;
     float lastClientPacketAt;
+    float lastBeaconSentAt; // Time since the last "I am here" message
     float remoteClientInput;
+    public bool IsMatchActive => matchActive;
     bool matchActive;
     string statusMessage = "";
     int statesReceived;
     int joinPacketsSent;
     bool hostResponded;
+
+    // A list to store servers found on the network
+    public struct ServerInfo { public string Name; public string IP; public float LastSeen; }
+    private List<ServerInfo> discoveredServers = new List<ServerInfo>();
+    public List<ServerInfo> DiscoveredServers => discoveredServers;
 
     IPEndPoint clientEndpoint;
 
@@ -99,7 +111,7 @@ public class PongNetworkSession : MonoBehaviour
         udp = gameObject.AddComponent<UDPService>();
         SceneManager.sceneLoaded += OnSceneLoaded;
         CacheSceneRefs();
-        ConfigureForMode(NetMode.Offline);
+        ConfigureForMode(NetMode.Menu);
     }
 
     void OnDestroy()
@@ -108,6 +120,63 @@ public class PongNetworkSession : MonoBehaviour
         if (_instance == this)
         {
             _instance = null;
+        }
+    }
+
+    void SendDiscoveryBeacon()
+    {
+        if (Time.time - lastBeaconSentAt < 1.0f) return;
+
+        string message = $"B|PongHost|{port}";
+        // Broadcast to the network
+        udp.Broadcast(message, DefaultPort);
+        // ALSO send directly to localhost for testing on the same machine
+        udp.Send(message, "127.0.0.1", DefaultPort);
+        
+        lastBeaconSentAt = Time.time;
+    }
+
+    void UpdateDiscovery()
+    {
+        // For discovery, we MUST listen on the DefaultPort (25000)
+        // because that's where beacons are broadcasted.
+        if (!udp.IsBound)
+        {
+            // We use the fixed port so we can catch broadcasts
+            bool ok = udp.Bind(DefaultPort, OnDiscoveryMessage);
+            if (!ok)
+            {
+                // If the port is busy (another host is running), 
+                // we try to bind with port sharing or port 0 as a fallback.
+                udp.Bind(0, OnDiscoveryMessage);
+            }
+        }
+
+        // Remove servers that haven't been seen for 5 seconds
+        discoveredServers.RemoveAll(s => Time.time - s.LastSeen > 5.0f);
+    }
+
+    void OnDiscoveryMessage(string message, IPEndPoint from)
+    {
+        string[] parts = message.Split('|');
+        if (parts.Length >= 2 && parts[0] == "B")
+        {
+            string serverName = parts[1];
+            string ip = from.Address.ToString();
+
+            // Update or add the server to our list
+            int index = discoveredServers.FindIndex(s => s.IP == ip);
+            if (index >= 0)
+            {
+                ServerInfo info = discoveredServers[index];
+                info.LastSeen = Time.time;
+                discoveredServers[index] = info;
+            }
+            else
+            {
+                discoveredServers.Add(new ServerInfo { Name = serverName, IP = ip, LastSeen = Time.time });
+                Debug.Log($"[NetworkSession] Discovered new server: {serverName} at {ip}");
+            }
         }
     }
 
@@ -124,6 +193,13 @@ public class PongNetworkSession : MonoBehaviour
 
     void Update()
     {
+        // If we are in the Menu, we should listen for other hosts
+        if (mode == NetMode.Menu)
+        {
+            UpdateDiscovery();
+            return;
+        }
+
         if (SceneManager.GetActiveScene().name != "Pong")
         {
             return;
@@ -137,6 +213,7 @@ public class PongNetworkSession : MonoBehaviour
         if (mode == NetMode.Host)
         {
             UpdateHostMatchState();
+            SendDiscoveryBeacon(); // Shout "I am a host!" every second
         }
         else if (mode == NetMode.Client)
         {
@@ -145,15 +222,42 @@ public class PongNetworkSession : MonoBehaviour
                 return;
             }
 
+            // DISCONNECT DETECTION: If we haven't heard from the host for a while
             if (matchActive && Time.time - lastClientPacketAt > ClientTimeout)
             {
-                matchActive = false;
-                ApplyGameplayForCurrentMode();
-                statusMessage = "Deconnecte du host.";
+                Debug.Log("[NetworkSession] Host timed out. Migrating to Host...");
+                MigrateToHost();
+                return;
             }
 
             SendClientInput();
         }
+    }
+
+    /// <summary>
+    /// Promotes this client to be the new Host of the game.
+    /// This is called if the original host leaves the match.
+    /// </summary>
+    public void MigrateToHost()
+    {
+        Debug.Log("[NetworkSession] --- Starting Host Migration ---");
+        
+        // 1. Tell the Manager that we are now the Host
+        if (GameNetworkManager.Instance != null)
+        {
+            GameNetworkManager.Instance.SetHostMode(true);
+        }
+
+        // 2. Restart the network session as a Host
+        // This will bind to port 25000 and start sending beacons
+        StartHost();
+
+        // 3. Reset the ball and UI
+        // We explicitly ensure matchActive is false so the WaitingUI pops up
+        matchActive = false;
+        ResetMatch(sendToClient: false); 
+        
+        Debug.Log("[NetworkSession] Migration complete. We are now the Host and waiting for clients.");
     }
 
     void LateUpdate()
@@ -216,8 +320,26 @@ public class PongNetworkSession : MonoBehaviour
         ShutdownNetwork();
     }
 
+    [Header("Debug UI")]
+    [Tooltip("If enabled, shows the old-style legacy UI box in the corner.")]
+    public bool ShowLegacyUI = false;
+
+    /// <summary>
+    /// Updates the IP address we want to connect to as a client.
+    /// </summary>
+    public void SetRemoteIP(string ip)
+    {
+        remoteIp = ip;
+    }
+
+    /// <summary>
+    /// Draws a legacy UI on screen for debugging purposes.
+    /// This is a bit old-school, so we usually hide it in favor of the new UI.
+    /// </summary>
     void OnGUI()
     {
+        if (!ShowLegacyUI) return;
+
         if (SceneManager.GetActiveScene().name != "Pong")
         {
             return;
@@ -307,7 +429,7 @@ public class PongNetworkSession : MonoBehaviour
         GUILayout.EndArea();
     }
 
-    void StartHost()
+    public void StartHost()
     {
         ShutdownNetwork();
         clientEndpoint = null;
@@ -328,7 +450,7 @@ public class PongNetworkSession : MonoBehaviour
         ConfigureForMode(NetMode.Host);
     }
 
-    void StartClient()
+    public void StartClient()
     {
         remoteIp = remoteIp != null ? remoteIp.Trim() : "";
 
@@ -400,9 +522,28 @@ public class PongNetworkSession : MonoBehaviour
         ball.ResetBall();
         ResetPaddlePositions();
         remoteClientInput = 0f;
-        matchActive = mode == NetMode.Offline
-            || (mode == NetMode.Host && clientEndpoint != null)
-            || (mode == NetMode.Client && udp.IsBound);
+
+        // FIXED LOGIC: A match is only "Active" (running) if:
+        // 1. It's Offline mode.
+        // 2. OR It's Host mode AND a client has actually connected.
+        // 3. OR It's Client mode AND we've actually received something from the host.
+        if (mode == NetMode.Offline)
+        {
+            matchActive = true;
+        }
+        else if (mode == NetMode.Host)
+        {
+            matchActive = (clientEndpoint != null);
+        }
+        else if (mode == NetMode.Client)
+        {
+            matchActive = hostResponded || statesReceived > 0;
+        }
+        else
+        {
+            matchActive = false;
+        }
+
         ApplyGameplayForCurrentMode();
 
         if (sendToClient && mode == NetMode.Host && clientEndpoint != null)
@@ -477,12 +618,28 @@ public class PongNetworkSession : MonoBehaviour
         return new[] { "IP introuvable" };
     }
 
-    void StopSession()
+    /// <summary>
+    /// Stops the current network session and returns to the menu state.
+    /// </summary>
+    /// <param name="showMenu">If true, tells the MenuController to show the main panel.</param>
+    public void StopSession(bool showMenu = true)
     {
         ShutdownNetwork();
         matchActive = false;
         clientEndpoint = null;
-        ConfigureForMode(NetMode.Offline);
+        ConfigureForMode(NetMode.Menu);
+
+        // INFINITE RECURSION FIX: 
+        // We only tell the menu to show itself if we are not already coming from the menu.
+        if (showMenu)
+        {
+            // We use UnityEngine.Object explicitly because "Object" can be confused with "System.Object"
+            MenuController menu = UnityEngine.Object.FindAnyObjectByType<MenuController>();
+            if (menu != null)
+            {
+                menu.ShowMainPanel();
+            }
+        }
     }
 
     void ShutdownNetwork()
@@ -496,16 +653,16 @@ public class PongNetworkSession : MonoBehaviour
     void ConfigureForMode(NetMode nextMode)
     {
         CacheSceneRefs();
-        if (!HasSceneRefs())
+        if (!HasSceneRefs() && nextMode != NetMode.Menu)
         {
-            Debug.LogWarning("PongNetworkSession: scene refs missing, staying offline.");
-            mode = NetMode.Offline;
+            Debug.LogWarning("PongNetworkSession: scene refs missing, staying in Menu.");
+            mode = NetMode.Menu;
             return;
         }
 
         mode = nextMode;
 
-        if (mode == NetMode.Host || mode == NetMode.Client)
+        if (mode == NetMode.Host || mode == NetMode.Client || mode == NetMode.Menu)
         {
             matchActive = false;
         }
@@ -519,6 +676,12 @@ public class PongNetworkSession : MonoBehaviour
 
     void ApplyGameplayForCurrentMode()
     {
+        if (GameGameplayUI != null)
+        {
+            // Only show the Game Gameplay UI (Win screen, etc.) if we are NOT in the Menu
+            GameGameplayUI.SetActive(mode != NetMode.Menu);
+        }
+
         if (!HasSceneRefs())
         {
             return;
@@ -526,17 +689,37 @@ public class PongNetworkSession : MonoBehaviour
 
         switch (mode)
         {
+            case NetMode.Menu:
+                // Disable everything in the menu
+                paddleLeft.enabled = false;
+                paddleRight.enabled = false;
+                ball.SetSimulate(false);
+                // Optionally hide the objects
+                paddleLeft.gameObject.SetActive(false);
+                paddleRight.gameObject.SetActive(false);
+                ball.gameObject.SetActive(false);
+                break;
             case NetMode.Offline:
+                paddleLeft.gameObject.SetActive(true);
+                paddleRight.gameObject.SetActive(true);
+                ball.gameObject.SetActive(true);
                 paddleLeft.enabled = true;
                 paddleRight.enabled = true;
                 ball.SetSimulate(true);
                 break;
             case NetMode.Host:
+                paddleLeft.gameObject.SetActive(true);
+                paddleRight.gameObject.SetActive(true);
+                ball.gameObject.SetActive(true);
+                // The Host only enables movement and ball physics IF a client is connected (matchActive)
                 paddleLeft.enabled = matchActive;
                 paddleRight.enabled = false;
-                ball.SetSimulate(matchActive);
+                ball.SetSimulate(matchActive); 
                 break;
             case NetMode.Client:
+                paddleLeft.gameObject.SetActive(true);
+                paddleRight.gameObject.SetActive(true);
+                ball.gameObject.SetActive(true);
                 paddleLeft.enabled = false;
                 paddleRight.enabled = false;
                 ball.SetSimulate(false);
@@ -548,12 +731,12 @@ public class PongNetworkSession : MonoBehaviour
     {
         paddleLeft = FindPaddle(PongPlayer.PlayerLeft);
         paddleRight = FindPaddle(PongPlayer.PlayerRight);
-        ball = GameObject.FindFirstObjectByType<PongBall>(FindObjectsInactive.Include);
+        ball = GameObject.FindAnyObjectByType<PongBall>(FindObjectsInactive.Include);
     }
 
     PongPaddle FindPaddle(PongPlayer player)
     {
-        PongPaddle[] paddles = GameObject.FindObjectsByType<PongPaddle>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        PongPaddle[] paddles = GameObject.FindObjectsByType<PongPaddle>(FindObjectsInactive.Include);
         foreach (PongPaddle paddle in paddles)
         {
             if (paddle.Player == player)
