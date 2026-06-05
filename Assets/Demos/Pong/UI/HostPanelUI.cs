@@ -1,61 +1,65 @@
 using UnityEngine;
-using UnityEngine.UI;
 using TMPro;
 
+/// <summary>
+/// Manages the Host Panel UI for difficulty selection.
+/// When a difficulty button is clicked, the game starts immediately with that difficulty.
+/// </summary>
 public class HostPanelUI : MonoBehaviour
 {
     [Header("UI Elements")]
-    public Button StartButton;
-    public TMP_Text SelectedDifficultyText;
+    [SerializeField] private TMP_Text SelectedDifficultyText;
 
     private string _currentDifficulty = "Normal";
 
     private void Start()
     {
-        // Default selection
-        SelectDifficulty("Normal");
-
-        // Setup Start button listener via code
-        if (StartButton != null)
-        {
-            StartButton.onClick.AddListener(OnStartClicked);
-            Debug.Log("[HostPanelUI] StartButton listener attached successfully.");
-        }
-        else
-        {
-            Debug.LogError("[HostPanelUI] StartButton is NOT assigned in the Inspector!");
-        }
+        // Display default selection
+        UpdateDifficultyDisplay("Normal");
+        Debug.Log("[HostPanelUI] Host Panel initialized with default difficulty: Normal");
     }
 
     /// <summary>
-    /// Called by Difficulty Buttons in the UI.
-    /// This must be PUBLIC to be seen by the Unity UI Click event list.
+    /// Called when a difficulty button is clicked in the UI.
+    /// Immediately starts the game with the selected difficulty.
+    /// This method must be PUBLIC to be accessible from the Unity UI Click event.
     /// </summary>
-    /// <param name="difficulty">The name of the difficulty (Easy, Normal, Hard, Intense)</param>
+    /// <param name="difficulty">The selected difficulty level (Easy, Normal, Hard, Intense)</param>
     public void SelectDifficulty(string difficulty)
     {
         _currentDifficulty = difficulty;
+        UpdateDifficultyDisplay(difficulty);
 
-        if (SelectedDifficultyText != null)
-            SelectedDifficultyText.text = $"Selected: {difficulty}";
+        Debug.Log($"[HostPanelUI] Difficulty selected: {difficulty} - Starting game...");
 
-        Debug.Log($"Difficulty selected: {difficulty}");
+        // Immediately start the host session
+        StartGame();
     }
 
     /// <summary>
-    /// This must be PUBLIC to be seen by the Unity UI Click event list.
+    /// Starts the game by telling the GameNetworkManager to begin hosting.
     /// </summary>
-    public void OnStartClicked()
+    private void StartGame()
     {
-        Debug.Log("[HostPanelUI] OnStartClicked triggered!");
-
         if (GameNetworkManager.Instance == null)
         {
             Debug.LogError("[HostPanelUI] GameNetworkManager.Instance is NULL! Is there a GameNetworkManager in your scene?");
             return;
         }
 
-        // Tell the NetworkManager to start the host
+        // Start hosting with the selected difficulty
         GameNetworkManager.Instance.StartHost(_currentDifficulty);
+    }
+
+    /// <summary>
+    /// Updates the UI text to show the selected difficulty.
+    /// </summary>
+    /// <param name="difficulty">The difficulty name to display</param>
+    private void UpdateDifficultyDisplay(string difficulty)
+    {
+        if (SelectedDifficultyText != null)
+        {
+            SelectedDifficultyText.text = $"Difficulty: {difficulty}";
+        }
     }
 }
