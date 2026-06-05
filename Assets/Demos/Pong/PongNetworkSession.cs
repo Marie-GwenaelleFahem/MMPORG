@@ -1,944 +1,243 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
-[DefaultExecutionOrder(-200)]
+/// <summary>
+/// Simplified orchestrator for Pong networking.
+/// delegates actual networking work to PongServerManager and PongClientManager.
+/// </summary>
 public class PongNetworkSession : MonoBehaviour
 {
-    enum NetMode
-    {
-        Menu,
-        Offline,
-        Host,
-        Client
-    }
+    public static PongNetworkSession Instance { get; private set; }
 
-    [Header("UI References")]
-    public GameObject GameGameplayUI; // Reference to the canvas or panel containing game UI (like Win/Replay)
+    [Header("Managers")]
+    public PongServerManager ServerManager;
+    public PongClientManager ClientManager;
 
-    const int DefaultPort = 25000;
-    const float SendInterval = 0.02f;
-    const float ClientTimeout = 3f;
+    [Header("UI")]
+    public GameObject GameGameplayUI;
 
-    static PongNetworkSession _instance;
+    public bool IsMatchActive => (ServerManager != null && ServerManager.IsMatchActive) || 
+                                 (ClientManager != null && ClientManager.IsMatchActive);
 
-    public static PongNetworkSession Instance => _instance;
-    public bool IsNetworkSession => mode != NetMode.Offline && mode != NetMode.Menu;
-    public bool IsInMenu => mode == NetMode.Menu;
+    /// <summary>
+    /// Returns true if we are in a network session (either as host or client).
+    /// </summary>
+    public bool IsNetworkSession => (ServerManager != null && ServerManager.gameObject.activeSelf) ||
+                                    (ClientManager != null && ClientManager.gameObject.activeSelf);
 
-    UDPService udp;
-
-    PongPaddle paddleLeft;
-    PongPaddle paddleRight;
-    PongBall ball;
-
-    NetMode mode = NetMode.Offline;
-    string remoteIp = "127.0.0.1";
-    int port = DefaultPort;
-    float lastInputSentAt;
-    float lastStateSentAt;
-    float lastClientPacketAt;
-    float lastBeaconSentAt; // Time since the last "I am here" message
-    float remoteClientInput;
-    public bool IsMatchActive => matchActive;
-    bool matchActive;
-    string statusMessage = "";
-    int statesReceived;
-    int joinPacketsSent;
-    bool hostResponded;
-
-    // A list to store servers found on the network
-    public struct ServerInfo { public string Name; public string IP; public float LastSeen; }
-    private List<ServerInfo> discoveredServers = new List<ServerInfo>();
-    public List<ServerInfo> DiscoveredServers => discoveredServers;
-
-    IPEndPoint clientEndpoint;
+    /// <summary>
+    /// Returns true if we are not currently in an active host or client session.
+    /// </summary>
+    public bool IsInMenu => !IsNetworkSession;
 
     public bool CanMovePaddle(PongPlayer player)
     {
-        if (mode == NetMode.Offline)
-        {
-            return true;
-        }
+        // If no managers are active, we can't move
+        if (ServerManager == null || ClientManager == null) return false;
 
-        if (!matchActive)
-        {
-            return false;
-        }
+        // Offline mode equivalent (if both are inactive)
+        if (!ServerManager.gameObject.activeSelf && !ClientManager.gameObject.activeSelf) return true;
 
-        return mode == NetMode.Host && player == PongPlayer.PlayerLeft;
+        if (!IsMatchActive) return false;
+
+        // Only the Host can move the Left paddle locally
+        if (ServerManager.gameObject.activeSelf) return player == PongPlayer.PlayerLeft;
+
+        return false;
     }
 
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-    static void EnableRunInBackground()
-    {
-        Application.runInBackground = true;
-    }
+    private UDPService udp;
+    private List<PongClientManager.ServerInfo> discoveredServers = new List<PongClientManager.ServerInfo>();
+    public List<PongClientManager.ServerInfo> DiscoveredServers => discoveredServers;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
     {
-        if (SceneManager.GetActiveScene().name != "Pong")
-        {
-            return;
-        }
-
-        if (_instance != null)
-        {
-            return;
-        }
+        if (SceneManager.GetActiveScene().name != "Pong") return;
+        if (Instance != null) return;
 
         GameObject go = new GameObject("PongNetworkSession");
-        _instance = go.AddComponent<PongNetworkSession>();
+        go.AddComponent<PongNetworkSession>();
     }
 
-    void Awake()
+    private void Awake()
     {
-        if (_instance != null && _instance != this)
+        if (Instance != null && Instance != this)
         {
             Destroy(gameObject);
             return;
         }
-
-        _instance = this;
+        Instance = this;
         DontDestroyOnLoad(gameObject);
-        udp = gameObject.AddComponent<UDPService>();
+
+        udp = GetComponent<UDPService>();
+        if (udp == null) udp = gameObject.AddComponent<UDPService>();
+
         SceneManager.sceneLoaded += OnSceneLoaded;
-        CacheSceneRefs();
-        ConfigureForMode(NetMode.Menu);
+        EnsureManagers();
     }
 
-    void OnDestroy()
+    private void OnDestroy()
     {
         SceneManager.sceneLoaded -= OnSceneLoaded;
-        if (_instance == this)
+        if (Instance == this) Instance = null;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (scene.name == "Pong")
         {
-            _instance = null;
+            CacheRefsInManagers();
         }
     }
 
-    void SendDiscoveryBeacon()
+    private void EnsureManagers()
     {
-        if (Time.time - lastBeaconSentAt < 1.0f) return;
+        if (ServerManager == null) ServerManager = GetComponentInChildren<PongServerManager>(true);
+        if (ClientManager == null) ClientManager = GetComponentInChildren<PongClientManager>(true);
 
-        string message = $"B|PongHost|{port}";
-        // Broadcast to the network
-        udp.Broadcast(message, DefaultPort);
-        // ALSO send directly to localhost for testing on the same machine
-        udp.Send(message, "127.0.0.1", DefaultPort);
-        
-        lastBeaconSentAt = Time.time;
+        if (ServerManager == null)
+        {
+            GameObject serverGo = new GameObject("ServerManager");
+            serverGo.transform.SetParent(transform);
+            ServerManager = serverGo.AddComponent<PongServerManager>();
+            serverGo.SetActive(false);
+        }
+
+        if (ClientManager == null)
+        {
+            GameObject clientGo = new GameObject("ClientManager");
+            clientGo.transform.SetParent(transform);
+            ClientManager = clientGo.AddComponent<PongClientManager>();
+            clientGo.SetActive(false);
+        }
+
+        CacheRefsInManagers();
     }
 
-    void UpdateDiscovery()
+    private void CacheRefsInManagers()
     {
-        // For discovery, we MUST listen on the DefaultPort (25000)
-        // because that's where beacons are broadcasted.
-        if (!udp.IsBound)
-        {
-            // We use the fixed port so we can catch broadcasts
-            bool ok = udp.Bind(DefaultPort, OnDiscoveryMessage);
-            if (!ok)
-            {
-                // If the port is busy (another host is running), 
-                // we try to bind with port sharing or port 0 as a fallback.
-                udp.Bind(0, OnDiscoveryMessage);
-            }
-        }
+        PongPaddle left = FindPaddle(PongPlayer.PlayerLeft);
+        PongPaddle right = FindPaddle(PongPlayer.PlayerRight);
+        PongBall ball = GameObject.FindAnyObjectByType<PongBall>(FindObjectsInactive.Include);
 
-        // Remove servers that haven't been seen for 5 seconds
-        discoveredServers.RemoveAll(s => Time.time - s.LastSeen > 5.0f);
+        if (ServerManager != null) { ServerManager.PaddleLeft = left; ServerManager.PaddleRight = right; ServerManager.Ball = ball; }
+        if (ClientManager != null) { ClientManager.PaddleLeft = left; ClientManager.PaddleRight = right; ClientManager.Ball = ball; }
     }
 
-    void OnDiscoveryMessage(string message, IPEndPoint from)
+    private PongPaddle FindPaddle(PongPlayer player)
     {
-        string[] parts = message.Split('|');
-        if (parts.Length >= 2 && parts[0] == "B")
-        {
-            string serverName = parts[1];
-            string ip = from.Address.ToString();
-
-            // Update or add the server to our list
-            int index = discoveredServers.FindIndex(s => s.IP == ip);
-            if (index >= 0)
-            {
-                ServerInfo info = discoveredServers[index];
-                info.LastSeen = Time.time;
-                discoveredServers[index] = info;
-            }
-            else
-            {
-                discoveredServers.Add(new ServerInfo { Name = serverName, IP = ip, LastSeen = Time.time });
-                Debug.Log($"[NetworkSession] Discovered new server: {serverName} at {ip}");
-            }
-        }
-    }
-
-    void OnSceneLoaded(Scene scene, LoadSceneMode loadMode)
-    {
-        if (scene.name != "Pong")
-        {
-            return;
-        }
-
-        CacheSceneRefs();
-        ApplyGameplayForCurrentMode();
-    }
-
-    void Update()
-    {
-        // If we are in the Menu, we should listen for other hosts
-        if (mode == NetMode.Menu)
-        {
-            UpdateDiscovery();
-            return;
-        }
-
-        if (SceneManager.GetActiveScene().name != "Pong")
-        {
-            return;
-        }
-
-        if (paddleLeft == null || paddleRight == null || ball == null)
-        {
-            CacheSceneRefs();
-        }
-
-        if (mode == NetMode.Host)
-        {
-            UpdateHostMatchState();
-            SendDiscoveryBeacon(); // Shout "I am a host!" every second
-        }
-        else if (mode == NetMode.Client)
-        {
-            if (!udp.IsBound)
-            {
-                return;
-            }
-
-            // DISCONNECT DETECTION: If we haven't heard from the host for a while
-            if (matchActive && Time.time - lastClientPacketAt > ClientTimeout)
-            {
-                Debug.Log("[NetworkSession] Host timed out. Migrating to Host...");
-                MigrateToHost();
-                return;
-            }
-
-            SendClientInput();
-        }
-    }
-
-    /// <summary>
-    /// Promotes this client to be the new Host of the game.
-    /// This is called if the original host leaves the match.
-    /// </summary>
-    public void MigrateToHost()
-    {
-        Debug.Log("[NetworkSession] --- Starting Host Migration ---");
-        
-        // 1. Tell the Manager that we are now the Host
-        if (GameNetworkManager.Instance != null)
-        {
-            GameNetworkManager.Instance.SetHostMode(true);
-        }
-
-        // 2. Restart the network session as a Host
-        // This will bind to port 25000 and start sending beacons
-        StartHost();
-
-        // 3. Reset the ball and UI
-        // We explicitly ensure matchActive is false so the WaitingUI pops up
-        matchActive = false;
-        ResetMatch(sendToClient: false); 
-        
-        Debug.Log("[NetworkSession] Migration complete. We are now the Host and waiting for clients.");
-    }
-
-    void LateUpdate()
-    {
-        if (SceneManager.GetActiveScene().name != "Pong")
-        {
-            return;
-        }
-
-        if (paddleLeft == null || paddleRight == null || ball == null)
-        {
-            CacheSceneRefs();
-        }
-
-        if (mode != NetMode.Host || !matchActive || !HasSceneRefs())
-        {
-            return;
-        }
-
-        Vector3 rightPos = paddleRight.transform.position;
-        rightPos.y = Mathf.Clamp(
-            rightPos.y + remoteClientInput * paddleRight.Speed * Time.deltaTime,
-            paddleRight.MinY,
-            paddleRight.MaxY);
-        paddleRight.transform.position = rightPos;
-        BroadcastState();
-    }
-
-    void UpdateHostMatchState()
-    {
-        bool opponentConnected = udp.IsBound
-            && clientEndpoint != null
-            && Time.time - lastClientPacketAt <= ClientTimeout;
-
-        if (opponentConnected == matchActive)
-        {
-            return;
-        }
-
-        matchActive = opponentConnected;
-        if (matchActive)
-        {
-            statusMessage = "Adversaire connecte. C'est parti !";
-            ResetMatch(sendToClient: true);
-        }
-        else
-        {
-            statusMessage = "En attente d'un client...";
-            ApplyGameplayForCurrentMode();
-        }
-    }
-
-    bool HasSceneRefs()
-    {
-        return paddleLeft != null && paddleRight != null && ball != null;
-    }
-
-    void OnDisable()
-    {
-        ShutdownNetwork();
-    }
-
-    [Header("Debug UI")]
-    [Tooltip("If enabled, shows the old-style legacy UI box in the corner.")]
-    public bool ShowLegacyUI = false;
-
-    /// <summary>
-    /// Updates the IP address we want to connect to as a client.
-    /// </summary>
-    public void SetRemoteIP(string ip)
-    {
-        remoteIp = ip;
-    }
-
-    /// <summary>
-    /// Draws a legacy UI on screen for debugging purposes.
-    /// This is a bit old-school, so we usually hide it in favor of the new UI.
-    /// </summary>
-    void OnGUI()
-    {
-        if (!ShowLegacyUI) return;
-
-        if (SceneManager.GetActiveScene().name != "Pong")
-        {
-            return;
-        }
-
-        GUILayout.BeginArea(new Rect(10, 10, 420, 360), GUI.skin.box);
-        GUILayout.Label("Pong Self-Host UDP");
-        GUILayout.Label("Mode: " + mode);
-
-        if (mode == NetMode.Offline)
-        {
-            GUILayout.Label("2 PC: meme Wi-Fi/box, IP LAN du host, pare-feu UDP " + DefaultPort + " entrant sur le host.");
-
-            foreach (string ip in GetLocalIPv4Addresses())
-            {
-                GUILayout.Label("IP host possible: " + ip);
-            }
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("IP", GUILayout.Width(30));
-            remoteIp = GUILayout.TextField(remoteIp, GUILayout.Width(120));
-            GUILayout.Label("Port", GUILayout.Width(40));
-            int.TryParse(GUILayout.TextField(port.ToString(), GUILayout.Width(70)), out port);
-            GUILayout.EndHorizontal();
-
-            if (!string.IsNullOrEmpty(statusMessage))
-            {
-                GUILayout.Label(statusMessage);
-            }
-
-            if (GUILayout.Button("Start Host"))
-            {
-                StartHost();
-            }
-
-            if (GUILayout.Button("Join Client"))
-            {
-                StartClient();
-            }
-        }
-        else
-        {
-            if (mode == NetMode.Host)
-            {
-                GUILayout.Label("Ecoute UDP: " + (udp.IsBound ? "OUI" : "NON") + " | Port: " + port);
-                GUILayout.Label("Pare-feu Windows: autoriser UDP entrant port " + port + " sur CE PC.");
-                foreach (string ip in GetLocalIPv4Addresses())
-                {
-                    GUILayout.Label("IP a donner au client: " + ip);
-                }
-            }
-
-            if (mode == NetMode.Host && !matchActive)
-            {
-                GUILayout.Label("En attente d'un client...");
-            }
-            else if (mode == NetMode.Client && !matchActive)
-            {
-                GUILayout.Label("Connecte. En attente du host...");
-            }
-
-            if (!string.IsNullOrEmpty(statusMessage))
-            {
-                GUILayout.Label(statusMessage);
-            }
-
-            if (mode == NetMode.Host)
-            {
-                GUILayout.Label("Client: " + (clientEndpoint != null ? "OUI" : "NON"));
-                if (clientEndpoint != null)
-                {
-                    GUILayout.Label("Endpoint client: " + clientEndpoint);
-                }
-            }
-            else
-            {
-                GUILayout.Label("Join envoyes: " + joinPacketsSent + " | Host repondu: " + (hostResponded ? "OUI" : "NON"));
-                GUILayout.Label("Etats recus: " + statesReceived);
-            }
-
-            if (GUILayout.Button("Disconnect"))
-            {
-                StopSession();
-            }
-        }
-
-        GUILayout.EndArea();
+        PongPaddle[] paddles = GameObject.FindObjectsByType<PongPaddle>(FindObjectsInactive.Include);
+        foreach (PongPaddle paddle in paddles) { if (paddle.Player == player) return paddle; }
+        return null;
     }
 
     public void StartHost()
     {
-        ShutdownNetwork();
-        clientEndpoint = null;
-        lastClientPacketAt = 0f;
+        StopSession(false);
+        EnsureManagers();
 
-        bool ok = udp.Bind(port, OnHostMessage);
-        if (!ok)
-        {
-            statusMessage = "Echec Start Host UDP port " + port + ": "
-                + (string.IsNullOrEmpty(udp.LastError) ? "port deja utilise ?" : udp.LastError);
-            ConfigureForMode(NetMode.Offline);
-            return;
-        }
+        // Release the discovery binding so the ServerManager can take over the port
+        if (udp != null) udp.Close();
 
-        remoteClientInput = 0f;
-        matchActive = false;
-        statusMessage = "Host UDP pret. Donne une IP au client.";
-        ConfigureForMode(NetMode.Host);
+        ServerManager.gameObject.SetActive(true);
+        ClientManager.gameObject.SetActive(false);
+        ServerManager.StartServer();
+        ApplyGameplayUI(true);
     }
 
-    public void StartClient()
+    public void StartClient(string ip)
     {
-        remoteIp = remoteIp != null ? remoteIp.Trim() : "";
+        StopSession(false);
+        EnsureManagers();
 
-        if (!IPAddress.TryParse(remoteIp, out _))
-        {
-            statusMessage = "IP invalide: " + remoteIp;
-            return;
-        }
+        // Release the discovery binding so the ClientManager can take over the port
+        if (udp != null) udp.Close();
 
-        if (remoteIp == "127.0.0.1")
-        {
-            statusMessage = "127.0.0.1 = local seulement. Sur 2 PC, mets l'IP LAN du host.";
-        }
-
-        ShutdownNetwork();
-        clientEndpoint = null;
-        lastClientPacketAt = Time.time;
-        joinPacketsSent = 0;
-        hostResponded = false;
-        statesReceived = 0;
-
-        bool ok = udp.Bind(0, OnClientMessage);
-        if (!ok)
-        {
-            statusMessage = "Echec bind UDP client: " + udp.LastError;
-            ConfigureForMode(NetMode.Offline);
-            return;
-        }
-
-        SendJoinPacket();
-        statusMessage = "Client UDP vers " + remoteIp + ":" + port;
-        matchActive = false;
-        statesReceived = 0;
-        ConfigureForMode(NetMode.Client);
+        ServerManager.gameObject.SetActive(false);
+        ClientManager.gameObject.SetActive(true);
+        ClientManager.StartClient(ip);
+        ApplyGameplayUI(true);
     }
 
-    void SendJoinPacket()
+    public void SetRemoteIP(string ip)
     {
-        udp.Send("J\n", remoteIp, port);
-        joinPacketsSent++;
-        lastInputSentAt = Time.time;
+        if (ClientManager != null) ClientManager.ServerIP = ip;
+    }
+
+    public void StopSession(bool showMenu = true)
+    {
+        if (ServerManager != null) { ServerManager.StopServer(); ServerManager.gameObject.SetActive(false); }
+        if (ClientManager != null) { ClientManager.StopClient(); ClientManager.gameObject.SetActive(false); }
+
+        if (udp != null) udp.Close();
+
+        ApplyGameplayUI(false);
+
+        if (showMenu)
+        {
+            MenuController menu = FindAnyObjectByType<MenuController>();
+            if (menu != null) menu.ShowMainPanel();
+        }
+    }
+
+    private void ApplyGameplayUI(bool active)
+    {
+        if (GameGameplayUI != null) GameGameplayUI.SetActive(active);
     }
 
     public void RequestReplay()
     {
-        if (mode == NetMode.Host)
-        {
-            ResetMatch(sendToClient: true);
-            return;
-        }
+        if (ServerManager != null && ServerManager.gameObject.activeSelf) ServerManager.ResetMatch(true);
+        else if (ClientManager != null && ClientManager.gameObject.activeSelf) ClientManager.RequestReplay();
+    }
 
-        if (mode == NetMode.Client && udp.IsBound)
+    private void OnHostMigrationTriggered()
+    {
+        Debug.Log("[NetworkSession] Migrating to Host...");
+        StartHost();
+    }
+
+    private void Update()
+    {
+        // Background discovery when not in an active session
+        if (IsInMenu)
         {
-            udp.Send("R\n", remoteIp, port);
+            if (!udp.IsBound)
+            {
+                // Discovery uses the fixed port 25000
+                if (!udp.Bind(25000, OnDiscoveryMessage)) udp.Bind(0, OnDiscoveryMessage);
+            }
+            // Cleanup old servers
+            discoveredServers.RemoveAll(s => Time.time - s.LastSeen > 5.0f);
         }
     }
 
-    void ResetMatch(bool sendToClient)
+    private void OnDiscoveryMessage(string message, IPEndPoint from)
     {
-        if (!HasSceneRefs())
+        if (message.StartsWith("B|", StringComparison.Ordinal))
         {
-            CacheSceneRefs();
-            if (!HasSceneRefs())
+            string[] parts = message.Split('|');
+            if (parts.Length >= 2)
             {
-                return;
-            }
-        }
-
-        ball.ResetBall();
-        ResetPaddlePositions();
-        remoteClientInput = 0f;
-
-        // FIXED LOGIC: A match is only "Active" (running) if:
-        // 1. It's Offline mode.
-        // 2. OR It's Host mode AND a client has actually connected.
-        // 3. OR It's Client mode AND we've actually received something from the host.
-        if (mode == NetMode.Offline)
-        {
-            matchActive = true;
-        }
-        else if (mode == NetMode.Host)
-        {
-            matchActive = (clientEndpoint != null);
-        }
-        else if (mode == NetMode.Client)
-        {
-            matchActive = hostResponded || statesReceived > 0;
-        }
-        else
-        {
-            matchActive = false;
-        }
-
-        ApplyGameplayForCurrentMode();
-
-        if (sendToClient && mode == NetMode.Host && clientEndpoint != null)
-        {
-            udp.Send("R\n", clientEndpoint);
-            BroadcastState(force: true);
-        }
-    }
-
-    void ResetPaddlePositions()
-    {
-        Vector3 leftPos = paddleLeft.transform.position;
-        leftPos.y = 0f;
-        paddleLeft.transform.position = leftPos;
-
-        Vector3 rightPos = paddleRight.transform.position;
-        rightPos.y = 0f;
-        paddleRight.transform.position = rightPos;
-    }
-
-    static string[] GetLocalIPv4Addresses()
-    {
-        var preferred = new List<string>();
-        var others = new List<string>();
-
-        foreach (NetworkInterface networkInterface in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (networkInterface.OperationalStatus != OperationalStatus.Up)
-            {
-                continue;
-            }
-
-            if (networkInterface.NetworkInterfaceType == NetworkInterfaceType.Loopback)
-            {
-                continue;
-            }
-
-            foreach (UnicastIPAddressInformation address in networkInterface.GetIPProperties().UnicastAddresses)
-            {
-                if (address.Address.AddressFamily != AddressFamily.InterNetwork)
+                string name = parts[1];
+                string ip = from.Address.ToString();
+                int index = discoveredServers.FindIndex(s => s.IP == ip);
+                if (index >= 0)
                 {
-                    continue;
-                }
-
-                string ip = address.Address.ToString();
-                if (ip.StartsWith("169.254."))
-                {
-                    continue;
-                }
-
-                if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172."))
-                {
-                    preferred.Add(ip);
+                    var info = discoveredServers[index];
+                    info.LastSeen = Time.time;
+                    discoveredServers[index] = info;
                 }
                 else
                 {
-                    others.Add(ip);
+                    discoveredServers.Add(new PongClientManager.ServerInfo { Name = name, IP = ip, LastSeen = Time.time });
+                    Debug.Log($"[Discovery] Found server: {name} at {ip}");
                 }
             }
         }
-
-        if (preferred.Count > 0)
-        {
-            return preferred.ToArray();
-        }
-
-        if (others.Count > 0)
-        {
-            return others.ToArray();
-        }
-
-        return new[] { "IP introuvable" };
-    }
-
-    /// <summary>
-    /// Stops the current network session and returns to the menu state.
-    /// </summary>
-    /// <param name="showMenu">If true, tells the MenuController to show the main panel.</param>
-    public void StopSession(bool showMenu = true)
-    {
-        ShutdownNetwork();
-        matchActive = false;
-        clientEndpoint = null;
-        ConfigureForMode(NetMode.Menu);
-
-        // INFINITE RECURSION FIX: 
-        // We only tell the menu to show itself if we are not already coming from the menu.
-        if (showMenu)
-        {
-            // We use UnityEngine.Object explicitly because "Object" can be confused with "System.Object"
-            MenuController menu = UnityEngine.Object.FindAnyObjectByType<MenuController>();
-            if (menu != null)
-            {
-                menu.ShowMainPanel();
-            }
-        }
-    }
-
-    void ShutdownNetwork()
-    {
-        if (udp != null && udp.IsBound)
-        {
-            udp.Close();
-        }
-    }
-
-    void ConfigureForMode(NetMode nextMode)
-    {
-        CacheSceneRefs();
-        if (!HasSceneRefs() && nextMode != NetMode.Menu)
-        {
-            Debug.LogWarning("PongNetworkSession: scene refs missing, staying in Menu.");
-            mode = NetMode.Menu;
-            return;
-        }
-
-        mode = nextMode;
-
-        if (mode == NetMode.Host || mode == NetMode.Client || mode == NetMode.Menu)
-        {
-            matchActive = false;
-        }
-        else
-        {
-            matchActive = true;
-        }
-
-        ApplyGameplayForCurrentMode();
-    }
-
-    void ApplyGameplayForCurrentMode()
-    {
-        if (GameGameplayUI != null)
-        {
-            // Only show the Game Gameplay UI (Win screen, etc.) if we are NOT in the Menu
-            GameGameplayUI.SetActive(mode != NetMode.Menu);
-        }
-
-        if (!HasSceneRefs())
-        {
-            return;
-        }
-
-        switch (mode)
-        {
-            case NetMode.Menu:
-                // Disable everything in the menu
-                paddleLeft.enabled = false;
-                paddleRight.enabled = false;
-                ball.SetSimulate(false);
-                // Optionally hide the objects
-                paddleLeft.gameObject.SetActive(false);
-                paddleRight.gameObject.SetActive(false);
-                ball.gameObject.SetActive(false);
-                break;
-            case NetMode.Offline:
-                paddleLeft.gameObject.SetActive(true);
-                paddleRight.gameObject.SetActive(true);
-                ball.gameObject.SetActive(true);
-                paddleLeft.enabled = true;
-                paddleRight.enabled = true;
-                ball.SetSimulate(true);
-                break;
-            case NetMode.Host:
-                paddleLeft.gameObject.SetActive(true);
-                paddleRight.gameObject.SetActive(true);
-                ball.gameObject.SetActive(true);
-                // The Host only enables movement and ball physics IF a client is connected (matchActive)
-                paddleLeft.enabled = matchActive;
-                paddleRight.enabled = false;
-                ball.SetSimulate(matchActive); 
-                break;
-            case NetMode.Client:
-                paddleLeft.gameObject.SetActive(true);
-                paddleRight.gameObject.SetActive(true);
-                ball.gameObject.SetActive(true);
-                paddleLeft.enabled = false;
-                paddleRight.enabled = false;
-                ball.SetSimulate(false);
-                break;
-        }
-    }
-
-    void CacheSceneRefs()
-    {
-        paddleLeft = FindPaddle(PongPlayer.PlayerLeft);
-        paddleRight = FindPaddle(PongPlayer.PlayerRight);
-        ball = GameObject.FindAnyObjectByType<PongBall>(FindObjectsInactive.Include);
-    }
-
-    PongPaddle FindPaddle(PongPlayer player)
-    {
-        PongPaddle[] paddles = GameObject.FindObjectsByType<PongPaddle>(FindObjectsInactive.Include);
-        foreach (PongPaddle paddle in paddles)
-        {
-            if (paddle.Player == player)
-            {
-                return paddle;
-            }
-        }
-
-        return null;
-    }
-
-    void SendClientInput()
-    {
-        if (!udp.IsBound)
-        {
-            return;
-        }
-
-        if (Time.time - lastInputSentAt < SendInterval)
-        {
-            return;
-        }
-
-        if (!matchActive)
-        {
-            SendJoinPacket();
-            return;
-        }
-
-        float axis = 0f;
-        if (Keyboard.current != null)
-        {
-            if (Keyboard.current.upArrowKey.isPressed)
-            {
-                axis += 1f;
-            }
-            if (Keyboard.current.downArrowKey.isPressed)
-            {
-                axis -= 1f;
-            }
-        }
-
-        udp.Send("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n", remoteIp, port);
-        lastInputSentAt = Time.time;
-    }
-
-    void BroadcastState(bool force = false)
-    {
-        if (!udp.IsBound || !HasSceneRefs() || !matchActive || clientEndpoint == null)
-        {
-            return;
-        }
-
-        if (!force && Time.time - lastStateSentAt < SendInterval)
-        {
-            return;
-        }
-
-        string message = string.Join("|", new[]
-        {
-            "S",
-            ball.transform.position.x.ToString("F4", CultureInfo.InvariantCulture),
-            ball.transform.position.y.ToString("F4", CultureInfo.InvariantCulture),
-            paddleLeft.transform.position.y.ToString("F4", CultureInfo.InvariantCulture),
-            paddleRight.transform.position.y.ToString("F4", CultureInfo.InvariantCulture),
-            ((int)ball.State).ToString(CultureInfo.InvariantCulture)
-        }) + "\n";
-
-        udp.Send(message, clientEndpoint);
-        lastStateSentAt = Time.time;
-    }
-
-    void RegisterClient(IPEndPoint from)
-    {
-        if (from == null)
-        {
-            return;
-        }
-
-        clientEndpoint = from;
-        lastClientPacketAt = Time.time;
-    }
-
-    void OnHostMessage(string message, IPEndPoint from)
-    {
-        if (string.IsNullOrEmpty(message))
-        {
-            return;
-        }
-
-        RegisterClient(from);
-
-        if (message.StartsWith("R", StringComparison.Ordinal))
-        {
-            ResetMatch(sendToClient: true);
-            return;
-        }
-
-        if (message.StartsWith("J", StringComparison.Ordinal))
-        {
-            udp.Send("A\n", from);
-
-            if (!matchActive)
-            {
-                matchActive = true;
-                statusMessage = "Adversaire connecte. C'est parti !";
-                ResetMatch(sendToClient: true);
-            }
-
-            return;
-        }
-
-        if (message.StartsWith("I|", StringComparison.Ordinal))
-        {
-            if (!matchActive)
-            {
-                matchActive = true;
-                statusMessage = "Adversaire connecte. C'est parti !";
-                ResetMatch(sendToClient: true);
-            }
-        }
-
-        if (!message.StartsWith("I|", StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        string[] parts = message.Split('|');
-        if (parts.Length < 2)
-        {
-            return;
-        }
-
-        if (float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float axis))
-        {
-            remoteClientInput = Mathf.Clamp(axis, -1f, 1f);
-        }
-    }
-
-    void OnClientMessage(string message, IPEndPoint from)
-    {
-        if (string.IsNullOrEmpty(message))
-        {
-            return;
-        }
-
-        lastClientPacketAt = Time.time;
-
-        if (message.StartsWith("A", StringComparison.Ordinal))
-        {
-            hostResponded = true;
-            statusMessage = "Host joignable. Attente demarrage partie...";
-            return;
-        }
-
-        if (message.StartsWith("R", StringComparison.Ordinal))
-        {
-            matchActive = true;
-            ResetMatch(sendToClient: false);
-            return;
-        }
-
-        string[] parts = message.Split('|');
-        if (parts.Length < 6 || parts[0] != "S")
-        {
-            return;
-        }
-
-        matchActive = true;
-        statesReceived++;
-        statusMessage = "En jeu";
-
-        if (!float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float ballX) ||
-            !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float ballY) ||
-            !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float leftY) ||
-            !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float rightY) ||
-            !int.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out int stateInt))
-        {
-            Debug.LogWarning("PongNetworkSession: invalid state message: " + message);
-            return;
-        }
-
-        if (paddleLeft == null || paddleRight == null || ball == null)
-        {
-            CacheSceneRefs();
-            if (!HasSceneRefs())
-            {
-                return;
-            }
-        }
-
-        Vector3 leftPos = paddleLeft.transform.position;
-        leftPos.y = leftY;
-        paddleLeft.transform.position = leftPos;
-
-        Vector3 rightPos = paddleRight.transform.position;
-        rightPos.y = rightY;
-        paddleRight.transform.position = rightPos;
-
-        PongBallState state = Enum.IsDefined(typeof(PongBallState), stateInt)
-            ? (PongBallState)stateInt
-            : PongBallState.Playing;
-        ball.ApplyNetworkState(new Vector3(ballX, ballY, ball.transform.position.z), state);
     }
 }

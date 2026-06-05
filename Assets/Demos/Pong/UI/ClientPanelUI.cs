@@ -44,7 +44,7 @@ public class ClientPanelUI : MonoBehaviour
         }
 
         // 2. Get real servers found by the network session
-        List<PongNetworkSession.ServerInfo> foundServers = new List<PongNetworkSession.ServerInfo>();
+        List<PongClientManager.ServerInfo> foundServers = new List<PongClientManager.ServerInfo>();
         if (PongNetworkSession.Instance != null)
         {
             foundServers = PongNetworkSession.Instance.DiscoveredServers;

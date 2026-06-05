@@ -59,7 +59,7 @@ public class HostPanelUI : MonoBehaviour
     {
         if (SelectedDifficultyText != null)
         {
-            SelectedDifficultyText.text = $"Difficulty: {difficulty}";
+            SelectedDifficultyText.text = $"Difficulté: {difficulty}";
         }
     }
 }

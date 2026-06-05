@@ -19,7 +19,7 @@ public class WaitingUI : MonoBehaviour
             Transform found = transform.Find("WaitingPanel");
             if (found != null) WaitingPanel = found.gameObject;
         }
-            
+
         // 2. If still not found, search the whole scene
         if (WaitingPanel == null)
         {
@@ -32,7 +32,7 @@ public class WaitingUI : MonoBehaviour
         {
             StatusText = WaitingPanel.GetComponentInChildren<TMP_Text>(true);
         }
-        
+
         if (WaitingPanel == null)
         {
             Debug.LogError("[WaitingUI] CRITICAL: No object named 'WaitingPanel' found in this scene! Please create one in the UI.");
@@ -42,7 +42,7 @@ public class WaitingUI : MonoBehaviour
             Debug.Log("[WaitingUI] Successfully initialized and linked to: " + WaitingPanel.name);
         }
     }
-    
+
     private void OnEnable()
     {
         // Hide on start just in case, logic will turn it on in Update
@@ -51,13 +51,13 @@ public class WaitingUI : MonoBehaviour
 
     private void Update()
     {
-        // Safety check for the singleton
-        if (GameNetworkManager.Instance == null) return;
+        // Safety check for the singletons
+        if (GameNetworkManager.Instance == null || PongNetworkSession.Instance == null) return;
 
         // Determine if we are "Waiting"
         // 1. We are the Host but no client is connected
         bool isHostWaiting = GameNetworkManager.Instance.IsHost && !GameNetworkManager.Instance.IsClientConnected;
-        
+
         // 2. We are the Client but we haven't successfully synced with the host yet
         // (This handles the case where the host crashes or leaves during the match)
         bool isClientWaiting = !GameNetworkManager.Instance.IsHost && !GameNetworkManager.Instance.IsClientConnected && !PongNetworkSession.Instance.IsInMenu;
@@ -76,7 +76,7 @@ public class WaitingUI : MonoBehaviour
                 }
 
                 if (StatusText != null)
-                    StatusText.text = isHostWaiting ? "Waiting for another player..." : "Connection to host lost...";
+                    StatusText.text = isHostWaiting ? "En attente d'un deuxième joueur......" : "Connection au host perdue...";
             }
 
             // Freeze the game while waiting

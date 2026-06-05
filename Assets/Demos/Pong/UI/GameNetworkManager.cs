@@ -135,8 +135,7 @@ public class GameNetworkManager : MonoBehaviour
         else
         {
             Debug.Log($"[NetworkManager] Triggering PongNetworkSession.StartClient() for IP: {HostIP}");
-            PongNetworkSession.Instance.SetRemoteIP(HostIP);
-            PongNetworkSession.Instance.StartClient();
+            PongNetworkSession.Instance.StartClient(HostIP);
         }
     }
 
