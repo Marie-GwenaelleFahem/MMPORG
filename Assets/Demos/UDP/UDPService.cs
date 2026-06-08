@@ -31,11 +31,22 @@ public class UDPService : MonoBehaviour
             LastError = "";
             listenEndPoint = new IPEndPoint(IPAddress.Any, port);
             udp = new UdpClient();
+            
+            // Allow multiple apps to use the same port for listening to broadcasts
             udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            
+            // On some platforms, we need this to allow two instances on the same machine
+            // to listen to the same broadcast port.
             udp.ExclusiveAddressUse = false;
+            
+            udp.EnableBroadcast = true; 
             udp.Client.Bind(listenEndPoint);
+            
+            // Update the endpoint to reflect the actual port assigned (especially if port was 0)
+            listenEndPoint = (IPEndPoint)udp.Client.LocalEndPoint;
+            
             onMessage = handler;
-            Debug.Log("UDP en ecoute sur le port " + LocalPort);
+            Debug.Log($"[UDPService] Bound successfully to port {LocalPort}");
             return true;
         }
         catch (Exception ex)
@@ -77,6 +88,27 @@ public class UDPService : MonoBehaviour
         catch (Exception ex)
         {
             Debug.LogWarning("Erreur envoi UDP: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Sends a message to EVERY computer on the local network at the specified port.
+    /// Used for server discovery.
+    /// </summary>
+    public void Broadcast(string message, int port)
+    {
+        if (udp == null) return;
+
+        try
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(message);
+            // 255.255.255.255 is the "universal" broadcast address
+            IPEndPoint broadcastEndpoint = new IPEndPoint(IPAddress.Broadcast, port);
+            udp.Send(bytes, bytes.Length, broadcastEndpoint);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("Erreur Broadcast UDP: " + ex.Message);
         }
     }
 
