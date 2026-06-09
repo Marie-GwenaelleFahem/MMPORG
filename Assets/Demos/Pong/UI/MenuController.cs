@@ -9,7 +9,6 @@ public class MenuController : MonoBehaviour
 
     private void Start()
     {
-        // Start by showing the Main Panel
         ShowMainPanel();
     }
 
@@ -18,14 +17,8 @@ public class MenuController : MonoBehaviour
         SetAllPanelsInactive();
         MainPanel.SetActive(true);
 
-        // When returning to the Main Panel, we should stop any active session
-        // and hide the game elements.
-        if (PongNetworkSession.Instance != null)
-        {
-            // IMPORTANT: We pass 'false' here to avoid an infinite loop (recursion).
-            // The menu is already showing the panel, so we don't need the session to trigger it again.
-            PongNetworkSession.Instance.StopSession(false);
-        }
+        // When returning to the Main Panel, we should stop any active session and hide the game elements
+        if (PongNetworkSession.Instance != null) PongNetworkSession.Instance.StopSession(false);
     }
 
     public void ShowHostPanel()
@@ -40,10 +33,7 @@ public class MenuController : MonoBehaviour
         ClientPanel.SetActive(true);
     }
 
-    /// <summary>
-    /// Hides all menu panels. Useful when transitioning into the actual game.
-    /// </summary>
-    public void HideAll()
+    public void HideAllPanels()
     {
         SetAllPanelsInactive();
     }

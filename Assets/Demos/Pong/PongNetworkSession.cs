@@ -4,10 +4,7 @@ using System.Net;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-/// <summary>
-/// Simplified orchestrator for Pong networking.
-/// delegates actual networking work to PongServerManager and PongClientManager.
-/// </summary>
+// Simplified orchestrator for Pong networking, delegates actual networking work to PongServerManager and PongClientManager.
 public class PongNetworkSession : MonoBehaviour
 {
     public static PongNetworkSession Instance { get; private set; }
@@ -19,26 +16,21 @@ public class PongNetworkSession : MonoBehaviour
     [Header("UI")]
     public GameObject GameGameplayUI;
 
-    public bool IsMatchActive => (ServerManager != null && ServerManager.IsMatchActive) || 
-                                 (ClientManager != null && ClientManager.IsMatchActive);
+    public bool IsMatchActive => (ServerManager != null && ServerManager.IsMatchActive) ||
+                                (ClientManager != null && ClientManager.IsMatchActive);
 
-    /// <summary>
-    /// Returns true if we are in a network session (either as host or client).
-    /// </summary>
+    // Returns true if we are in a network session (either as host or client).
     public bool IsNetworkSession => (ServerManager != null && ServerManager.gameObject.activeSelf) ||
                                     (ClientManager != null && ClientManager.gameObject.activeSelf);
 
-    /// <summary>
-    /// Returns true if we are not currently in an active host or client session.
-    /// </summary>
+    // Returns true if we are not currently in an active host or client session.
     public bool IsInMenu => !IsNetworkSession;
 
     public bool CanMovePaddle(PongPlayer player)
     {
-        // If no managers are active, we can't move
         if (ServerManager == null || ClientManager == null) return false;
 
-        // Offline mode equivalent (if both are inactive)
+        // If both are inactive
         if (!ServerManager.gameObject.activeSelf && !ClientManager.gameObject.activeSelf) return true;
 
         if (!IsMatchActive) return false;
@@ -70,6 +62,7 @@ public class PongNetworkSession : MonoBehaviour
             Destroy(gameObject);
             return;
         }
+
         Instance = this;
         DontDestroyOnLoad(gameObject);
 
@@ -141,7 +134,7 @@ public class PongNetworkSession : MonoBehaviour
         EnsureManagers();
 
         // Release the discovery binding so the ServerManager can take over the port
-        if (udp != null) udp.Close();
+        if (udp != null) udp.CloseUDP();
 
         ServerManager.gameObject.SetActive(true);
         ClientManager.gameObject.SetActive(false);
@@ -155,7 +148,7 @@ public class PongNetworkSession : MonoBehaviour
         EnsureManagers();
 
         // Release the discovery binding so the ClientManager can take over the port
-        if (udp != null) udp.Close();
+        if (udp != null) udp.CloseUDP();
 
         ServerManager.gameObject.SetActive(false);
         ClientManager.gameObject.SetActive(true);
@@ -173,7 +166,7 @@ public class PongNetworkSession : MonoBehaviour
         if (ServerManager != null) { ServerManager.StopServer(); ServerManager.gameObject.SetActive(false); }
         if (ClientManager != null) { ClientManager.StopClient(); ClientManager.gameObject.SetActive(false); }
 
-        if (udp != null) udp.Close();
+        if (udp != null) udp.CloseUDP();
 
         ApplyGameplayUI(false);
 
@@ -209,22 +202,24 @@ public class PongNetworkSession : MonoBehaviour
             if (!udp.IsBound)
             {
                 // Discovery uses the fixed port 25000
-                if (!udp.Bind(25000, OnDiscoveryMessage)) udp.Bind(0, OnDiscoveryMessage);
+                if (!udp.Bind(25000, OnDiscoveryMessage)) { udp.Bind(0, OnDiscoveryMessage); }
+                ;
             }
             // Cleanup old servers
             discoveredServers.RemoveAll(s => Time.time - s.LastSeen > 5.0f);
         }
     }
 
-    private void OnDiscoveryMessage(string message, IPEndPoint from)
+    private void OnDiscoveryMessage(string message, IPEndPoint source)
     {
         if (message.StartsWith("B|", StringComparison.Ordinal))
         {
             string[] parts = message.Split('|');
+            Debug.Log($"Parts {string.Join(", ", parts)}");
             if (parts.Length >= 2)
             {
                 string name = parts[1];
-                string ip = from.Address.ToString();
+                string ip = source.Address.ToString();
                 int index = discoveredServers.FindIndex(s => s.IP == ip);
                 if (index >= 0)
                 {

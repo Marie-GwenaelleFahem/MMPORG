@@ -3,10 +3,6 @@ using UnityEngine.UI;
 using System.Collections.Generic;
 using TMPro;
 
-/// <summary>
-/// Handles the UI logic for joining a game.
-/// Simulates finding available games on the network.
-/// </summary>
 public class ClientPanelUI : MonoBehaviour
 {
     [Header("UI Layout")]
@@ -31,10 +27,7 @@ public class ClientPanelUI : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Mocks the discovery of games. 
-    /// In a real scenario, this would listen to UDP broadcasts.
-    /// </summary>
+    // This listen to UDP broadcasts.
     public void RefreshGameList()
     {
         // 1. Clear existing list
@@ -71,7 +64,7 @@ public class ClientPanelUI : MonoBehaviour
     private void CreateGameEntry(string serverName, string ip)
     {
         GameObject entry = Instantiate(GameEntryPrefab, GameListContainer);
-        
+
         // Setup the button text using TextMeshPro
         TMP_Text btnText = entry.GetComponentInChildren<TMP_Text>();
         if (btnText != null)

@@ -4,11 +4,11 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using System.Globalization;
 
-/// <summary>
-/// Manages the client-side logic for a Pong match.
-/// Responsible for: Discovering servers, joining a host, 
-/// sending player inputs, and applying state updates from the server.
-/// </summary>
+/*
+* Manages the client-side logic for a Pong match.
+* Responsible for: Discovering servers, joining a host, 
+* sending player inputs, and applying state updates from the server.
+*/
 public class PongClientManager : MonoBehaviour
 {
     [Header("Network Settings")]
@@ -57,7 +57,7 @@ public class PongClientManager : MonoBehaviour
 
     public void StopClient()
     {
-        if (udp != null) udp.Close();
+        if (udp != null) udp.CloseUDP();
         matchActive = false;
     }
 
@@ -85,7 +85,7 @@ public class PongClientManager : MonoBehaviour
 
     private void SendJoinPacket()
     {
-        udp.Send("J\n", ServerIP, ServerPort);
+        udp.SendToHost("J\n", ServerIP, ServerPort);
         lastInputSentAt = Time.time;
     }
 
@@ -100,13 +100,13 @@ public class PongClientManager : MonoBehaviour
             if (Keyboard.current.downArrowKey.isPressed) axis -= 1f;
         }
 
-        udp.Send("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n", ServerIP, ServerPort);
+        udp.SendToHost("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n", ServerIP, ServerPort);
         lastInputSentAt = Time.time;
     }
 
     public void RequestReplay()
     {
-        udp.Send("R\n", ServerIP, ServerPort);
+        udp.SendToHost("R\n", ServerIP, ServerPort);
     }
 
     private void HandleHostMigration()

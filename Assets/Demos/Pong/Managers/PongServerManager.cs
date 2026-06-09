@@ -1,13 +1,13 @@
+using System;
 using System.Collections.Generic;
 using System.Net;
 using UnityEngine;
 using System.Globalization;
 
-/// <summary>
-/// Manages the server-side logic for a Pong match.
-/// Responsible for: Broadcasting beacons, accepting connections, 
-/// processing client inputs, and broadcasting the match state.
-/// </summary>
+/* Manages the server-side logic for a Pong match.
+ * Responsible for: Broadcasting beacons, accepting connections, 
+ * processing client inputs, and broadcasting the match state.
+*/
 public class PongServerManager : MonoBehaviour
 {
     [Header("Network Settings")]
@@ -33,8 +33,7 @@ public class PongServerManager : MonoBehaviour
     public void StartServer()
     {
         udp = GetComponentInParent<UDPService>();
-        if (udp == null) udp = GetComponent<UDPService>();
-        if (udp == null) udp = gameObject.AddComponent<UDPService>();
+        if (udp == null) udp = GetComponent<UDPService>() ?? gameObject.AddComponent<UDPService>();
 
         bool ok = udp.Bind(ListenPort, OnMessageReceived);
         if (!ok)
@@ -52,7 +51,7 @@ public class PongServerManager : MonoBehaviour
     {
         if (udp != null)
         {
-            udp.Close();
+            udp.CloseUDP();
         }
         matchActive = false;
         clientEndpoint = null;
@@ -84,14 +83,15 @@ public class PongServerManager : MonoBehaviour
         }
     }
 
+    // Used by the host to periodically send a broadcast UDP packet.
     private void SendDiscoveryBeacon()
     {
         if (Time.time - lastBeaconSentAt < 1.0f) return;
 
         string message = $"B|PongHost|{ListenPort}";
         udp.Broadcast(message, ListenPort);
-        udp.Send(message, "127.0.0.1", ListenPort); // Local testing
-        
+        udp.SendToHost(message, "127.0.0.1", ListenPort); // Local testing
+
         lastBeaconSentAt = Time.time;
     }
 
@@ -123,7 +123,7 @@ public class PongServerManager : MonoBehaviour
 
         if (sendToClient && clientEndpoint != null)
         {
-            udp.Send("R\n", clientEndpoint);
+            udp.SendToEndpoint("R\n", clientEndpoint);
             BroadcastState();
         }
     }
@@ -151,7 +151,7 @@ public class PongServerManager : MonoBehaviour
             BallState = Ball.State
         };
 
-        udp.Send(state.ToString() + "\n", clientEndpoint);
+        udp.SendToEndpoint(state.ToString() + "\n", clientEndpoint);
     }
 
     private void OnMessageReceived(string message, IPEndPoint from)
@@ -172,7 +172,7 @@ public class PongServerManager : MonoBehaviour
 
         if (message.StartsWith("J", System.StringComparison.Ordinal))
         {
-            udp.Send("A\n", from); // Acknowledge join
+            udp.SendToEndpoint("A\n", from); // Acknowledge join
         }
         else if (message.StartsWith("I|", System.StringComparison.Ordinal))
         {

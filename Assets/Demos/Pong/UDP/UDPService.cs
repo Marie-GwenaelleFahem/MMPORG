@@ -7,11 +7,11 @@ using UnityEngine;
 [DefaultExecutionOrder(-50)]
 public class UDPService : MonoBehaviour
 {
-    public delegate void UDPMessageHandler(string message, IPEndPoint from);
+    public delegate void UDPMessageHandler(string message, IPEndPoint source);
 
     UdpClient udp;
     IPEndPoint listenEndPoint;
-    UDPMessageHandler onMessage;
+    UDPMessageHandler onMessageReceive;
 
     public string LastError { get; private set; } = "";
     public bool IsBound => udp != null;
@@ -21,8 +21,7 @@ public class UDPService : MonoBehaviour
     {
         if (udp != null)
         {
-            LastError = "Socket deja actif.";
-            Debug.LogWarning(LastError);
+            Debug.LogWarning("Socket already initialized! Close it first");
             return false;
         }
 
@@ -30,56 +29,47 @@ public class UDPService : MonoBehaviour
         {
             LastError = "";
             listenEndPoint = new IPEndPoint(IPAddress.Any, port);
-            udp = new UdpClient();
-            
+
             // Allow multiple apps to use the same port for listening to broadcasts
+            udp = new UdpClient();
             udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            
-            // On some platforms, we need this to allow two instances on the same machine
-            // to listen to the same broadcast port.
             udp.ExclusiveAddressUse = false;
-            
-            udp.EnableBroadcast = true; 
+
+            udp.EnableBroadcast = true;
             udp.Client.Bind(listenEndPoint);
-            
+
             // Update the endpoint to reflect the actual port assigned (especially if port was 0)
             listenEndPoint = (IPEndPoint)udp.Client.LocalEndPoint;
-            
-            onMessage = handler;
-            Debug.Log($"[UDPService] Bound successfully to port {LocalPort}");
+
+            Debug.Log($"Server listening on port: {LocalPort}");
+
+            onMessageReceive = handler;
             return true;
         }
-        catch (Exception ex)
+        catch (System.Exception ex)
         {
-            LastError = ex.Message;
-            Debug.LogWarning("Erreur bind UDP port " + port + ": " + ex.Message);
-            Close();
+            Debug.LogWarning("Error binding UDP port " + port + ": " + ex.Message);
+            CloseUDP();
             return false;
         }
     }
 
-    public void Send(string message, string host, int port)
+    public void SendToHost(string message, string host, int port)
     {
-        Send(message, new IPEndPoint(IPAddress.Parse(host), port));
+        SendToEndpoint(message, new IPEndPoint(IPAddress.Parse(host), port));
     }
 
-    public void Send(string message, IPEndPoint endpoint)
+    public void SendToEndpoint(string message, IPEndPoint endpoint)
     {
-        if (endpoint == null)
-        {
-            return;
-        }
+        if (endpoint == null) return;
 
         byte[] bytes = Encoding.UTF8.GetBytes(message);
-        Send(bytes, endpoint);
+        SendBytesToEndpoint(bytes, endpoint);
     }
 
-    public void Send(byte[] bytes, IPEndPoint endpoint)
+    public void SendBytesToEndpoint(byte[] bytes, IPEndPoint endpoint)
     {
-        if (udp == null || endpoint == null)
-        {
-            return;
-        }
+        if (udp == null || endpoint == null) return;
 
         try
         {
@@ -91,10 +81,7 @@ public class UDPService : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Sends a message to EVERY computer on the local network at the specified port.
-    /// Used for server discovery.
-    /// </summary>
+    // Sends a message to every computer on the local network at the specified port. Used for server discovery.
     public void Broadcast(string message, int port)
     {
         if (udp == null) return;
@@ -112,7 +99,7 @@ public class UDPService : MonoBehaviour
         }
     }
 
-    public void Close()
+    public void CloseUDP()
     {
         if (udp != null)
         {
@@ -121,32 +108,29 @@ public class UDPService : MonoBehaviour
         }
 
         listenEndPoint = null;
-        onMessage = null;
+        onMessageReceive = null;
     }
 
     void OnDisable()
     {
-        Close();
+        CloseUDP();
     }
 
     void Update()
     {
-        if (udp == null)
-        {
-            return;
-        }
+        if (udp == null) { return; }
 
         try
         {
             while (udp.Available > 0)
             {
-                IPEndPoint from = new IPEndPoint(IPAddress.Any, 0);
-                byte[] data = udp.Receive(ref from);
+                IPEndPoint sourceEndpoint = new IPEndPoint(IPAddress.Any, 0);
+                byte[] data = udp.Receive(ref sourceEndpoint);
                 string message = Encoding.UTF8.GetString(data).Trim('\r', ' ', '\t');
 
-                if (onMessage != null && !string.IsNullOrEmpty(message))
+                if (onMessageReceive != null && !string.IsNullOrEmpty(message))
                 {
-                    onMessage.Invoke(message, from);
+                    onMessageReceive.Invoke(message, sourceEndpoint);
                 }
             }
         }

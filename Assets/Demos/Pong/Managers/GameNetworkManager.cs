@@ -1,11 +1,7 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-/// <summary>
-/// This class acts as a bridge between the UI and the Networking logic.
-/// It follows the Singleton pattern so it can be accessed from any script.
-/// It persists across scenes to manage the transition from the menu to the game.
-/// </summary>
+// This class acts as a bridge between the UI and the Networking logic.
 public class GameNetworkManager : MonoBehaviour
 {
     public static GameNetworkManager Instance { get; private set; }
@@ -13,28 +9,23 @@ public class GameNetworkManager : MonoBehaviour
     [Header("Settings")]
     public string GameSceneName = "Pong";
 
-    // State variables
     public bool IsHost { get; private set; }
     public string SelectedDifficulty { get; private set; }
     public string HostIP { get; private set; }
 
-    /// <summary>
-    /// Checks if a client is connected by asking the PongNetworkSession.
-    /// </summary>
+    // Checks if a client is connected by asking the PongNetworkSession.
     public bool IsClientConnected => PongNetworkSession.Instance != null && PongNetworkSession.Instance.IsMatchActive;
 
     private void Awake()
     {
-        // Ensure only one instance exists (Singleton pattern)
+        // Ensure only one instance exists
         if (Instance == null)
         {
             Instance = this;
-            DontDestroyOnLoad(gameObject); // Keep this object alive when changing scenes
+            DontDestroyOnLoad(gameObject);
 
-            // Subscribe to the sceneLoaded event to know when the game scene is ready
             SceneManager.sceneLoaded += OnSceneLoaded;
 
-            // If the script starts already in the Pong scene, trigger immediately
             if (SceneManager.GetActiveScene().name == GameSceneName)
             {
                 TriggerNetworkStart();
@@ -47,16 +38,13 @@ public class GameNetworkManager : MonoBehaviour
     }
     private void OnDestroy()
     {
-        // Always unsubscribe from events when the object is destroyed to avoid memory leaks
         if (Instance == this)
         {
             SceneManager.sceneLoaded -= OnSceneLoaded;
         }
     }
 
-    /// <summary>
-    /// Prepares to start a host session and loads the game scene.
-    /// </summary>
+    // Prepares to start a host session and loads the game scene.
     public void StartHost(string difficulty)
     {
         IsHost = true;
@@ -78,13 +66,12 @@ public class GameNetworkManager : MonoBehaviour
             }
             else
             {
-                Debug.LogError($"[NetworkManager] CANNOT LOAD SCENE: '{GameSceneName}'. Make sure it is added to 'File -> Build Settings'!");
+                Debug.LogError($"[NetworkManager] CANNOT LOAD SCENE: {GameSceneName}");
             }
         }
     }
-    /// <summary>
-    /// Prepares to join a game at a specific IP address and loads the game scene.
-    /// </summary>
+
+    // Prepares to join a game at a specific IP address and loads the game scene.
     public void JoinGame(string ipAddress)
     {
         IsHost = false;
@@ -104,7 +91,6 @@ public class GameNetworkManager : MonoBehaviour
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
-        // When the Pong scene is loaded, we trigger the network logic
         if (scene.name == GameSceneName)
         {
             TriggerNetworkStart();
@@ -118,7 +104,7 @@ public class GameNetworkManager : MonoBehaviour
         if (menu != null)
         {
             Debug.Log("[NetworkManager] Hiding Menu UI");
-            menu.HideAll();
+            menu.HideAllPanels();
         }
 
         if (PongNetworkSession.Instance == null)
@@ -139,10 +125,6 @@ public class GameNetworkManager : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Updates whether this instance is acting as a host.
-    /// Used during "Host Migration" if the original host leaves.
-    /// </summary>
     public void SetHostMode(bool isHost)
     {
         IsHost = isHost;
