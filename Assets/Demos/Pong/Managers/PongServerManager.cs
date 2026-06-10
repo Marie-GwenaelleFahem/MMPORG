@@ -5,8 +5,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using UnityEngine;
-using UnityEngine.InputSystem;
-
 public class PongServerManager : MonoBehaviour
 {
     class RemotePlayer
@@ -138,15 +136,7 @@ public class PongServerManager : MonoBehaviour
 
     static float ReadHostLeftInput()
     {
-        float axis = 0f;
-        if (Keyboard.current == null)
-        {
-            return axis;
-        }
-
-        if (Keyboard.current.zKey.isPressed) axis += 1f;
-        if (Keyboard.current.sKey.isPressed) axis -= 1f;
-        return axis;
+        return PongPaddleInput.ReadVerticalAxis();
     }
 
     int GetPlayerCount(PongPlayer side)

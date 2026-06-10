@@ -2,8 +2,6 @@ using System;
 using System.Globalization;
 using System.Net;
 using UnityEngine;
-using UnityEngine.InputSystem;
-
 public class PongClientManager : MonoBehaviour
 {
     [Header("Network Settings")]
@@ -105,12 +103,7 @@ public class PongClientManager : MonoBehaviour
             return;
         }
 
-        float axis = 0f;
-        if (Keyboard.current != null)
-        {
-            if (Keyboard.current.zKey.isPressed) axis += 1f;
-            if (Keyboard.current.sKey.isPressed) axis -= 1f;
-        }
+        float axis = PongPaddleInput.ReadVerticalAxis();
 
         udp.SendToHost("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n", ServerIP, ServerPort);
         lastInputSentAt = Time.unscaledTime;
