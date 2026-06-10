@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Net;
 using UnityEngine;
@@ -33,7 +32,8 @@ public class PongServerManager : MonoBehaviour
     public void StartServer()
     {
         udp = GetComponentInParent<UDPService>();
-        if (udp == null) udp = GetComponent<UDPService>() ?? gameObject.AddComponent<UDPService>();
+        if (udp == null) udp = GetComponent<UDPService>();
+        if (udp == null) udp = gameObject.AddComponent<UDPService>();
 
         bool ok = udp.Bind(ListenPort, OnMessageReceived);
         if (!ok)
@@ -74,30 +74,31 @@ public class PongServerManager : MonoBehaviour
                 PaddleRight.MaxY);
             PaddleRight.transform.position = rightPos;
 
-            // Broadcast the state to the client
-            if (Time.time - lastStateSentAt >= StateSendInterval)
+            // Broadcast the state to the client using unscaledTime (WaitUI freezes Time.time)
+            if (Time.unscaledTime - lastStateSentAt >= StateSendInterval)
             {
                 BroadcastState();
-                lastStateSentAt = Time.time;
+                lastStateSentAt = Time.unscaledTime;
             }
         }
     }
 
-    // Used by the host to periodically send a broadcast UDP packet.
     private void SendDiscoveryBeacon()
     {
-        if (Time.time - lastBeaconSentAt < 1.0f) return;
+        // Uses unscaledTime because the game might be paused while waiting
+        if (Time.unscaledTime - lastBeaconSentAt < 1.0f) return;
 
         string message = $"B|PongHost|{ListenPort}";
         udp.Broadcast(message, ListenPort);
         udp.SendToHost(message, "127.0.0.1", ListenPort); // Local testing
 
-        lastBeaconSentAt = Time.time;
+        lastBeaconSentAt = Time.unscaledTime;
     }
 
     private void UpdateMatchStatus()
     {
-        bool opponentConnected = clientEndpoint != null && (Time.time - lastClientPacketAt <= ClientTimeout);
+        // Uses unscaledTime for timeout detection
+        bool opponentConnected = clientEndpoint != null && (Time.unscaledTime - lastClientPacketAt <= ClientTimeout);
 
         if (opponentConnected != matchActive)
         {
@@ -167,7 +168,7 @@ public class PongServerManager : MonoBehaviour
         if (isGameplayMessage)
         {
             clientEndpoint = from;
-            lastClientPacketAt = Time.time;
+            lastClientPacketAt = Time.unscaledTime;
         }
 
         if (message.StartsWith("J", System.StringComparison.Ordinal))

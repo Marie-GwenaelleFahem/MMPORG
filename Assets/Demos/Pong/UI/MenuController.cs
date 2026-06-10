@@ -40,8 +40,8 @@ public class MenuController : MonoBehaviour
 
     private void SetAllPanelsInactive()
     {
-        MainPanel.SetActive(false);
-        HostPanel.SetActive(false);
-        ClientPanel.SetActive(false);
+        if (MainPanel != null) MainPanel.SetActive(false);
+        if (HostPanel != null) HostPanel.SetActive(false);
+        if (ClientPanel != null) ClientPanel.SetActive(false);
     }
 }

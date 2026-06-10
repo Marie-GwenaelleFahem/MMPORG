@@ -17,7 +17,7 @@ public class PongNetworkSession : MonoBehaviour
     public GameObject GameGameplayUI;
 
     public bool IsMatchActive => (ServerManager != null && ServerManager.IsMatchActive) ||
-                                (ClientManager != null && ClientManager.IsMatchActive);
+                                 (ClientManager != null && ClientManager.IsMatchActive);
 
     // Returns true if we are in a network session (either as host or client).
     public bool IsNetworkSession => (ServerManager != null && ServerManager.gameObject.activeSelf) ||
@@ -168,6 +168,9 @@ public class PongNetworkSession : MonoBehaviour
 
         if (udp != null) udp.CloseUDP();
 
+        // Clear the state in the manager so WaitingUI doesn't freeze the menu
+        if (GameNetworkManager.Instance != null) GameNetworkManager.Instance.ClearState();
+
         ApplyGameplayUI(false);
 
         if (showMenu)
@@ -202,11 +205,9 @@ public class PongNetworkSession : MonoBehaviour
             if (!udp.IsBound)
             {
                 // Discovery uses the fixed port 25000
-                if (!udp.Bind(25000, OnDiscoveryMessage)) { udp.Bind(0, OnDiscoveryMessage); }
-                ;
+                if (!udp.Bind(25000, OnDiscoveryMessage)) udp.Bind(0, OnDiscoveryMessage);
             }
-            // Cleanup old servers
-            discoveredServers.RemoveAll(s => Time.time - s.LastSeen > 5.0f);
+            discoveredServers.RemoveAll(s => Time.unscaledTime - s.LastSeen > 5.0f);
         }
     }
 
@@ -215,7 +216,6 @@ public class PongNetworkSession : MonoBehaviour
         if (message.StartsWith("B|", StringComparison.Ordinal))
         {
             string[] parts = message.Split('|');
-            Debug.Log($"Parts {string.Join(", ", parts)}");
             if (parts.Length >= 2)
             {
                 string name = parts[1];
@@ -224,12 +224,12 @@ public class PongNetworkSession : MonoBehaviour
                 if (index >= 0)
                 {
                     var info = discoveredServers[index];
-                    info.LastSeen = Time.time;
+                    info.LastSeen = Time.unscaledTime;
                     discoveredServers[index] = info;
                 }
                 else
                 {
-                    discoveredServers.Add(new PongClientManager.ServerInfo { Name = name, IP = ip, LastSeen = Time.time });
+                    discoveredServers.Add(new PongClientManager.ServerInfo { Name = name, IP = ip, LastSeen = Time.unscaledTime });
                     Debug.Log($"[Discovery] Found server: {name} at {ip}");
                 }
             }

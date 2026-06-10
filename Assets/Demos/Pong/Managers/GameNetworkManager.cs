@@ -130,4 +130,11 @@ public class GameNetworkManager : MonoBehaviour
         IsHost = isHost;
         Debug.Log($"[NetworkManager] Mode changed. IsHost is now: {isHost}");
     }
+
+    public void ClearState()
+    {
+        IsHost = false;
+        HostIP = null;
+        SelectedDifficulty = null;
+    }
 }

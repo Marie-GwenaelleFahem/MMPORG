@@ -23,8 +23,6 @@ public class PongClientManager : MonoBehaviour
     public PongBall Ball;
 
     public struct ServerInfo { public string Name; public string IP; public float LastSeen; }
-    private List<ServerInfo> discoveredServers = new List<ServerInfo>();
-    public List<ServerInfo> DiscoveredServers => new List<ServerInfo>(); // Placeholder for compatibility
 
     private UDPService udp;
     private float lastInputSentAt;
@@ -50,7 +48,7 @@ public class PongClientManager : MonoBehaviour
 
         matchActive = false;
         hostResponded = false;
-        lastHostPacketAt = Time.time;
+        lastHostPacketAt = Time.unscaledTime;
         SendJoinPacket();
         Debug.Log($"[Client] Attempting to join {ServerIP}:{ServerPort}");
     }
@@ -67,7 +65,8 @@ public class PongClientManager : MonoBehaviour
 
         if (matchActive)
         {
-            if (Time.time - lastHostPacketAt > HostTimeout)
+            // Uses unscaledTime because the game might be paused while waiting
+            if (Time.unscaledTime - lastHostPacketAt > HostTimeout)
             {
                 Debug.Log("[Client] Host timed out!");
                 HandleHostMigration();
@@ -76,7 +75,7 @@ public class PongClientManager : MonoBehaviour
 
             SendInput();
         }
-        else if (hostResponded || Time.time - lastInputSentAt > 1.0f)
+        else if (hostResponded || Time.unscaledTime - lastInputSentAt > 1.0f)
         {
             // Keep trying to join until match is active
             SendJoinPacket();
@@ -86,12 +85,12 @@ public class PongClientManager : MonoBehaviour
     private void SendJoinPacket()
     {
         udp.SendToHost("J\n", ServerIP, ServerPort);
-        lastInputSentAt = Time.time;
+        lastInputSentAt = Time.unscaledTime;
     }
 
     private void SendInput()
     {
-        if (Time.time - lastInputSentAt < SendInterval) return;
+        if (Time.unscaledTime - lastInputSentAt < SendInterval) return;
 
         float axis = 0f;
         if (Keyboard.current != null)
@@ -101,7 +100,7 @@ public class PongClientManager : MonoBehaviour
         }
 
         udp.SendToHost("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n", ServerIP, ServerPort);
-        lastInputSentAt = Time.time;
+        lastInputSentAt = Time.unscaledTime;
     }
 
     public void RequestReplay()
@@ -122,7 +121,7 @@ public class PongClientManager : MonoBehaviour
 
     private void OnMessageReceived(string message, IPEndPoint from)
     {
-        lastHostPacketAt = Time.time;
+        lastHostPacketAt = Time.unscaledTime;
 
         if (message.StartsWith("A", System.StringComparison.Ordinal))
         {
