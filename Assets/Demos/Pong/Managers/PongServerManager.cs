@@ -144,7 +144,7 @@ public class PongServerManager : MonoBehaviour
             return axis;
         }
 
-        if (Keyboard.current.wKey.isPressed) axis += 1f;
+        if (Keyboard.current.zKey.isPressed) axis += 1f;
         if (Keyboard.current.sKey.isPressed) axis -= 1f;
         return axis;
     }

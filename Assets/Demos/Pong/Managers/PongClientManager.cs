@@ -108,8 +108,8 @@ public class PongClientManager : MonoBehaviour
         float axis = 0f;
         if (Keyboard.current != null)
         {
-            if (Keyboard.current.upArrowKey.isPressed) axis += 1f;
-            if (Keyboard.current.downArrowKey.isPressed) axis -= 1f;
+            if (Keyboard.current.zKey.isPressed) axis += 1f;
+            if (Keyboard.current.sKey.isPressed) axis -= 1f;
         }
 
         udp.SendToHost("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n", ServerIP, ServerPort);
