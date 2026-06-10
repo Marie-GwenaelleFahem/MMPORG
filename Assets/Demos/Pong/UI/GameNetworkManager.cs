@@ -17,6 +17,7 @@ public class GameNetworkManager : MonoBehaviour
     public bool IsHost { get; private set; }
     public string SelectedDifficulty { get; private set; }
     public string HostIP { get; private set; }
+    public PongPlayer JoinSide { get; private set; } = PongPlayer.PlayerRight;
 
     /// <summary>
     /// Checks if a client is connected by asking the PongNetworkSession.
@@ -85,10 +86,11 @@ public class GameNetworkManager : MonoBehaviour
     /// <summary>
     /// Prepares to join a game at a specific IP address and loads the game scene.
     /// </summary>
-    public void JoinGame(string ipAddress)
+    public void JoinGame(string ipAddress, PongPlayer side = PongPlayer.PlayerRight)
     {
         IsHost = false;
         HostIP = ipAddress;
+        JoinSide = side;
 
         Debug.Log($"[NetworkManager] Preparing to Join Game at IP: {ipAddress}");
 
@@ -114,7 +116,7 @@ public class GameNetworkManager : MonoBehaviour
     private void TriggerNetworkStart()
     {
         // Try to find the MenuController and hide it if we are starting a game
-        MenuController menu = Object.FindAnyObjectByType<MenuController>();
+        MenuController menu = UnityEngine.Object.FindAnyObjectByType<MenuController>();
         if (menu != null)
         {
             Debug.Log("[NetworkManager] Hiding Menu UI");
@@ -135,6 +137,7 @@ public class GameNetworkManager : MonoBehaviour
         else
         {
             Debug.Log($"[NetworkManager] Triggering PongNetworkSession.StartClient() for IP: {HostIP}");
+            PongNetworkSession.Instance.SetJoinSide(JoinSide);
             PongNetworkSession.Instance.StartClient(HostIP);
         }
     }
