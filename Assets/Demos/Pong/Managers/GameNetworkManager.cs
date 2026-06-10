@@ -14,8 +14,23 @@ public class GameNetworkManager : MonoBehaviour
     public string HostIP { get; private set; }
     public PongPlayer JoinSide { get; private set; } = PongPlayer.PlayerRight;
 
-    // Checks if a client is connected by asking the PongNetworkSession.
-    public bool IsClientConnected => PongNetworkSession.Instance != null && PongNetworkSession.Instance.IsMatchActive;
+    public bool IsClientConnected
+    {
+        get
+        {
+            if (PongNetworkSession.Instance == null)
+            {
+                return false;
+            }
+
+            if (IsHost)
+            {
+                return PongNetworkSession.Instance.IsMatchActive;
+            }
+
+            return PongNetworkSession.Instance.IsConnectedToHost;
+        }
+    }
 
     private void Awake()
     {

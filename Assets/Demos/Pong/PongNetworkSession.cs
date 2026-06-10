@@ -25,6 +25,10 @@ public class PongNetworkSession : MonoBehaviour
     public bool IsMatchActive => (ServerManager != null && ServerManager.IsMatchActive) ||
                                  (ClientManager != null && ClientManager.IsMatchActive);
 
+    public bool IsConnectedToHost => ClientManager != null &&
+                                     ClientManager.gameObject.activeSelf &&
+                                     ClientManager.IsConnectedToHost;
+
     public bool IsNetworkSession => (ServerManager != null && ServerManager.gameObject.activeSelf) ||
                                     (ClientManager != null && ClientManager.gameObject.activeSelf);
 

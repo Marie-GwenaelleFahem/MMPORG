@@ -29,6 +29,9 @@ public class PongClientManager : MonoBehaviour
 
     public bool IsMatchActive => matchActive;
 
+    public bool IsConnectedToHost => udp != null && udp.IsBound && hostResponded &&
+        Time.unscaledTime - lastHostPacketAt <= HostTimeout;
+
     public void SetJoinSide(PongPlayer side)
     {
         joinSide = side;
@@ -73,10 +76,12 @@ public class PongClientManager : MonoBehaviour
 
         if (matchActive)
         {
-            if (Time.unscaledTime - lastHostPacketAt > HostTimeout)
+            bool inCountdown = PongNetworkSession.Instance != null && PongNetworkSession.Instance.IsCountdownActive;
+            if (!inCountdown && Time.unscaledTime - lastHostPacketAt > HostTimeout)
             {
                 Debug.Log("[Client] Host timed out!");
-                HandleHostMigration();
+                matchActive = false;
+                hostResponded = false;
                 return;
             }
 
@@ -116,16 +121,6 @@ public class PongClientManager : MonoBehaviour
     public void RequestReplay()
     {
         udp.SendToHost("R\n", ServerIP, ServerPort);
-    }
-
-    void HandleHostMigration()
-    {
-        StopClient();
-        if (GameNetworkManager.Instance != null)
-        {
-            GameNetworkManager.Instance.SetHostMode(true);
-            SendMessageUpwards("OnHostMigrationTriggered", SendMessageOptions.DontRequireReceiver);
-        }
     }
 
     void OnMessageReceived(string message, IPEndPoint from)

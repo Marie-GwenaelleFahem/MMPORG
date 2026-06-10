@@ -83,10 +83,7 @@ public class PongServerManager : MonoBehaviour
         ApplyAggregatedPaddleMovement(PongPlayer.PlayerLeft, PaddleLeft);
         ApplyAggregatedPaddleMovement(PongPlayer.PlayerRight, PaddleRight);
 
-        if (PongNetworkSession.Instance != null &&
-            PongNetworkSession.Instance.IsGameplayUnlocked &&
-            remotePlayers.Count > 0 &&
-            Time.unscaledTime - lastStateSentAt >= StateSendInterval)
+        if (remotePlayers.Count > 0 && Time.unscaledTime - lastStateSentAt >= StateSendInterval)
         {
             BroadcastState();
             lastStateSentAt = Time.unscaledTime;

@@ -47,9 +47,12 @@ public class WaitingUI : MonoBehaviour
 
         bool isHostWaiting = GameNetworkManager.Instance.IsHost && !GameNetworkManager.Instance.IsClientConnected;
 
-        bool isClientWaiting = !GameNetworkManager.Instance.IsHost && !GameNetworkManager.Instance.IsClientConnected && !PongNetworkSession.Instance.IsInMenu;
+        bool isClientInSession = !GameNetworkManager.Instance.IsHost && !PongNetworkSession.Instance.IsInMenu;
+        bool isClientDisconnected = isClientInSession && !GameNetworkManager.Instance.IsClientConnected;
+        bool isClientWaitingForStart = isClientInSession && GameNetworkManager.Instance.IsClientConnected &&
+                                       !PongNetworkSession.Instance.IsMatchActive;
 
-        bool shouldDisplayWaitingPanel = isHostWaiting || isClientWaiting;
+        bool shouldDisplayWaitingPanel = isHostWaiting || isClientDisconnected || isClientWaitingForStart;
 
         if (shouldDisplayWaitingPanel)
         {
@@ -62,7 +65,20 @@ public class WaitingUI : MonoBehaviour
                 }
 
                 if (StatusText != null)
-                    StatusText.text = isHostWaiting ? "En attente d'un deuxième joueur......" : "Connection au host perdue...";
+                {
+                    if (isHostWaiting)
+                    {
+                        StatusText.text = "En attente d'un deuxième joueur......";
+                    }
+                    else if (isClientWaitingForStart)
+                    {
+                        StatusText.text = "Connecte au host. En attente du demarrage...";
+                    }
+                    else
+                    {
+                        StatusText.text = "Connection au host perdue...";
+                    }
+                }
             }
 
             // Freeze the game while waiting
