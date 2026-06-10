@@ -29,8 +29,11 @@ public class PongNetworkSession : MonoBehaviour
                                      ClientManager.gameObject.activeSelf &&
                                      ClientManager.IsConnectedToHost;
 
-    public bool IsNetworkSession => (ServerManager != null && ServerManager.gameObject.activeSelf) ||
-                                    (ClientManager != null && ClientManager.gameObject.activeSelf);
+    public bool IsNetworkSession => IsHosting || IsClienting;
+
+    public bool IsHosting => ServerManager != null && ServerManager.gameObject.activeSelf;
+
+    public bool IsClienting => ClientManager != null && ClientManager.gameObject.activeSelf;
 
     public bool IsInMenu => !IsNetworkSession;
     public bool IsCountdownActive => roundFlow.IsCountdownActive;
@@ -159,15 +162,12 @@ public class PongNetworkSession : MonoBehaviour
 
         if (IsInMenu)
         {
-            if (!udp.IsBound)
-            {
-                if (!udp.Bind(25000, OnDiscoveryMessage))
-                {
-                    udp.Bind(0, OnDiscoveryMessage);
-                }
-            }
-
+            EnsureDiscoveryListener();
             discoveredServers.RemoveAll(s => Time.unscaledTime - s.LastSeen > 5f);
+        }
+        else
+        {
+            StopDiscoveryListener();
         }
     }
 
@@ -240,14 +240,11 @@ public class PongNetworkSession : MonoBehaviour
 
     public void StartHost()
     {
-        StopSession(false);
+        StopSession(false, false);
         EnsureManagers();
         roundFlow.Reset();
 
-        if (udp != null)
-        {
-            udp.CloseUDP();
-        }
+        StopDiscoveryListener();
 
         ServerManager.gameObject.SetActive(true);
         ClientManager.gameObject.SetActive(false);
@@ -258,14 +255,11 @@ public class PongNetworkSession : MonoBehaviour
 
     public void StartClient(string ip)
     {
-        StopSession(false);
+        StopSession(false, false);
         EnsureManagers();
         roundFlow.Reset();
 
-        if (udp != null)
-        {
-            udp.CloseUDP();
-        }
+        StopDiscoveryListener();
 
         ServerManager.gameObject.SetActive(false);
         ClientManager.gameObject.SetActive(true);
@@ -273,7 +267,7 @@ public class PongNetworkSession : MonoBehaviour
         ApplyGameplayUI(true);
     }
 
-    public void StopSession(bool showMenu = true)
+    public void StopSession(bool showMenu = true, bool clearNetworkState = true)
     {
         roundFlow.Reset();
 
@@ -289,12 +283,9 @@ public class PongNetworkSession : MonoBehaviour
             ClientManager.gameObject.SetActive(false);
         }
 
-        if (udp != null)
-        {
-            udp.CloseUDP();
-        }
+        StopDiscoveryListener();
 
-        if (GameNetworkManager.Instance != null)
+        if (clearNetworkState && GameNetworkManager.Instance != null)
         {
             GameNetworkManager.Instance.ClearState();
         }
@@ -354,6 +345,31 @@ public class PongNetworkSession : MonoBehaviour
                             IsGameplayUnlocked &&
                             IsMatchActive;
         ball.SetSimulate(hostSimulate);
+    }
+
+    void EnsureDiscoveryListener()
+    {
+        if (udp == null)
+        {
+            udp = GetComponent<UDPService>();
+            if (udp == null)
+            {
+                udp = gameObject.AddComponent<UDPService>();
+            }
+        }
+
+        if (!udp.IsBound)
+        {
+            udp.Bind(PongNetworkPorts.DiscoveryPort, OnDiscoveryMessage);
+        }
+    }
+
+    void StopDiscoveryListener()
+    {
+        if (udp != null && udp.IsBound)
+        {
+            udp.CloseUDP();
+        }
     }
 
     void OnDiscoveryMessage(string message, IPEndPoint source)

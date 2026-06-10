@@ -8,9 +8,9 @@ public class PongClientManager : MonoBehaviour
 {
     [Header("Network Settings")]
     public string ServerIP = "127.0.0.1";
-    public int ServerPort = 25000;
+    public int ServerPort = PongNetworkPorts.GamePort;
     public float SendInterval = 0.02f;
-    public float HostTimeout = 3f;
+    public float HostTimeout = 5f;
 
     [Header("References")]
     public PongPaddle PaddleLeft;
@@ -29,8 +29,8 @@ public class PongClientManager : MonoBehaviour
 
     public bool IsMatchActive => matchActive;
 
-    public bool IsConnectedToHost => udp != null && udp.IsBound && hostResponded &&
-        Time.unscaledTime - lastHostPacketAt <= HostTimeout;
+    public bool IsConnectedToHost => udp != null && udp.IsBound && hostResponded && (
+        !matchActive || Time.unscaledTime - lastHostPacketAt <= HostTimeout);
 
     public void SetJoinSide(PongPlayer side)
     {
@@ -40,9 +40,7 @@ public class PongClientManager : MonoBehaviour
     public void StartClient(string ip)
     {
         ServerIP = ip;
-        udp = GetComponentInParent<UDPService>();
-        if (udp == null) udp = GetComponent<UDPService>();
-        if (udp == null) udp = gameObject.AddComponent<UDPService>();
+        udp = EnsureUdp();
 
         if (!udp.Bind(0, OnMessageReceived))
         {
@@ -200,5 +198,20 @@ public class PongClientManager : MonoBehaviour
         PaddleLeft.transform.position = new Vector3(PaddleLeft.transform.position.x, state.PaddleLeftY, PaddleLeft.transform.position.z);
         PaddleRight.transform.position = new Vector3(PaddleRight.transform.position.x, state.PaddleRightY, PaddleRight.transform.position.z);
         Ball.ApplyNetworkState(new Vector3(state.BallX, state.BallY, Ball.transform.position.z), state.BallState);
+    }
+
+    UDPService EnsureUdp()
+    {
+        if (udp == null)
+        {
+            udp = GetComponent<UDPService>();
+        }
+
+        if (udp == null)
+        {
+            udp = gameObject.AddComponent<UDPService>();
+        }
+
+        return udp;
     }
 }

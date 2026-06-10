@@ -45,14 +45,16 @@ public class WaitingUI : MonoBehaviour
     {
         if (GameNetworkManager.Instance == null || PongNetworkSession.Instance == null) return;
 
-        bool isHostWaiting = GameNetworkManager.Instance.IsHost && !GameNetworkManager.Instance.IsClientConnected;
+        bool isHosting = PongNetworkSession.Instance.IsHosting;
+        bool isClienting = PongNetworkSession.Instance.IsClienting;
 
-        bool isClientInSession = !GameNetworkManager.Instance.IsHost && !PongNetworkSession.Instance.IsInMenu;
-        bool isClientDisconnected = isClientInSession && !GameNetworkManager.Instance.IsClientConnected;
-        bool isClientWaitingForStart = isClientInSession && GameNetworkManager.Instance.IsClientConnected &&
+        bool isHostWaiting = isHosting && !PongNetworkSession.Instance.IsMatchActive;
+        bool isClientDisconnected = isClienting && !PongNetworkSession.Instance.IsConnectedToHost;
+        bool isClientWaitingForStart = isClienting && PongNetworkSession.Instance.IsConnectedToHost &&
                                        !PongNetworkSession.Instance.IsMatchActive;
 
-        bool shouldDisplayWaitingPanel = isHostWaiting || isClientDisconnected || isClientWaitingForStart;
+        bool shouldFreezeGame = isHostWaiting || isClientDisconnected;
+        bool shouldDisplayWaitingPanel = shouldFreezeGame || isClientWaitingForStart;
 
         if (shouldDisplayWaitingPanel)
         {
@@ -81,8 +83,7 @@ public class WaitingUI : MonoBehaviour
                 }
             }
 
-            // Freeze the game while waiting
-            Time.timeScale = 0;
+            Time.timeScale = shouldFreezeGame ? 0f : 1f;
         }
         else
         {

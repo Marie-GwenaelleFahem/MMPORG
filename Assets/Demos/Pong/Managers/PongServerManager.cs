@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -16,7 +18,8 @@ public class PongServerManager : MonoBehaviour
     }
 
     [Header("Network Settings")]
-    public int ListenPort = 25000;
+    public int ListenPort = PongNetworkPorts.GamePort;
+    public int DiscoveryPort = PongNetworkPorts.DiscoveryPort;
     public float StateSendInterval = 0.02f;
     public float ClientTimeout = 3f;
 
@@ -28,6 +31,7 @@ public class PongServerManager : MonoBehaviour
     readonly Dictionary<string, RemotePlayer> remotePlayers = new Dictionary<string, RemotePlayer>();
 
     UDPService udp;
+    UdpClient beaconSender;
     float lastStateSentAt;
     float lastBeaconSentAt;
     bool matchActive;
@@ -36,10 +40,7 @@ public class PongServerManager : MonoBehaviour
 
     public void StartServer()
     {
-        udp = GetComponentInParent<UDPService>();
-        if (udp == null) udp = GetComponent<UDPService>();
-        if (udp == null) udp = gameObject.AddComponent<UDPService>();
-
+        udp = EnsureUdp();
         if (!udp.Bind(ListenPort, OnMessageReceived))
         {
             Debug.LogError("[Server] Failed to bind to port " + ListenPort);
@@ -58,6 +59,8 @@ public class PongServerManager : MonoBehaviour
         {
             udp.CloseUDP();
         }
+
+        CloseBeaconSender();
 
         matchActive = false;
         remotePlayers.Clear();
@@ -168,9 +171,34 @@ public class PongServerManager : MonoBehaviour
         }
 
         string message = "B|PongHost|" + ListenPort;
-        udp.Broadcast(message, ListenPort);
-        udp.SendToHost(message, "127.0.0.1", ListenPort);
+        byte[] bytes = Encoding.UTF8.GetBytes(message);
+        UdpClient sender = EnsureBeaconSender();
+        sender.Send(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort));
+        sender.Send(bytes, bytes.Length, new IPEndPoint(IPAddress.Loopback, DiscoveryPort));
         lastBeaconSentAt = Time.unscaledTime;
+    }
+
+    UdpClient EnsureBeaconSender()
+    {
+        if (beaconSender != null)
+        {
+            return beaconSender;
+        }
+
+        beaconSender = new UdpClient();
+        beaconSender.EnableBroadcast = true;
+        return beaconSender;
+    }
+
+    void CloseBeaconSender()
+    {
+        if (beaconSender == null)
+        {
+            return;
+        }
+
+        beaconSender.Close();
+        beaconSender = null;
     }
 
     void UpdateMatchStatus()
@@ -490,5 +518,20 @@ public class PongServerManager : MonoBehaviour
     public void OnCountdownFinished()
     {
         SetGameplayActive(matchActive);
+    }
+
+    UDPService EnsureUdp()
+    {
+        if (udp == null)
+        {
+            udp = GetComponent<UDPService>();
+        }
+
+        if (udp == null)
+        {
+            udp = gameObject.AddComponent<UDPService>();
+        }
+
+        return udp;
     }
 }

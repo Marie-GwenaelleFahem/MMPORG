@@ -23,12 +23,17 @@ public class GameNetworkManager : MonoBehaviour
                 return false;
             }
 
-            if (IsHost)
+            if (PongNetworkSession.Instance.IsHosting)
             {
                 return PongNetworkSession.Instance.IsMatchActive;
             }
 
-            return PongNetworkSession.Instance.IsConnectedToHost;
+            if (PongNetworkSession.Instance.IsClienting)
+            {
+                return PongNetworkSession.Instance.IsConnectedToHost;
+            }
+
+            return false;
         }
     }
 

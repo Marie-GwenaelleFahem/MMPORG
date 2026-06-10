@@ -37,6 +37,7 @@ public class UDPService : MonoBehaviour
 
             udp.EnableBroadcast = true;
             udp.Client.Bind(listenEndPoint);
+            DisableUdpConnReset(udp.Client);
 
             // Update the endpoint to reflect the actual port assigned (especially if port was 0)
             listenEndPoint = (IPEndPoint)udp.Client.LocalEndPoint;
@@ -134,9 +135,40 @@ public class UDPService : MonoBehaviour
                 }
             }
         }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+        {
+            // Windows: ICMP "port unreachable" after sending to a closed UDP port.
+        }
+        catch (ObjectDisposedException)
+        {
+        }
         catch (Exception ex)
         {
             Debug.LogWarning("Erreur reception UDP: " + ex.Message);
+        }
+    }
+
+    static void DisableUdpConnReset(Socket socket)
+    {
+        if (socket == null)
+        {
+            return;
+        }
+
+        if (Application.platform != RuntimePlatform.WindowsEditor &&
+            Application.platform != RuntimePlatform.WindowsPlayer)
+        {
+            return;
+        }
+
+        try
+        {
+            const int SIO_UDP_CONNRESET = -1744830452;
+            socket.IOControl((IOControlCode)SIO_UDP_CONNRESET, new byte[] { 0, 0, 0, 0 }, null);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("UDP SIO_UDP_CONNRESET: " + ex.Message);
         }
     }
 }
