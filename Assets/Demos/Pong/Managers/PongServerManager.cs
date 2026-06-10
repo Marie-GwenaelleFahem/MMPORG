@@ -368,6 +368,27 @@ public class PongServerManager : MonoBehaviour
         return false;
     }
 
+    PongPlayer PickBalancedSide()
+    {
+        int leftCount = GetPlayerCount(PongPlayer.PlayerLeft);
+        int rightCount = GetPlayerCount(PongPlayer.PlayerRight);
+
+        if (leftCount < rightCount)
+        {
+            return PongPlayer.PlayerLeft;
+        }
+
+        if (rightCount < leftCount)
+        {
+            return PongPlayer.PlayerRight;
+        }
+
+        // Égalité : alterner (1er client → droite car gauche = host)
+        return remotePlayers.Count % 2 == 0
+            ? PongPlayer.PlayerRight
+            : PongPlayer.PlayerLeft;
+    }
+
     RemotePlayer GetOrCreateRemotePlayer(IPEndPoint from)
     {
         string key = EndpointKey(from);
@@ -466,19 +487,25 @@ public class PongServerManager : MonoBehaviour
             return;
         }
 
+        string endpointKey = EndpointKey(from);
+        bool isNewRemote = !remotePlayers.ContainsKey(endpointKey);
+        PongPlayer assignedSide = PongPlayer.PlayerRight;
+        if (message.StartsWith("J", StringComparison.Ordinal) && isNewRemote)
+        {
+            assignedSide = PickBalancedSide();
+        }
+
         RemotePlayer player = GetOrCreateRemotePlayer(from);
         PongPlayer previousSide = player.Side;
 
         if (message.StartsWith("J", StringComparison.Ordinal))
         {
-            PongPlayer requestedSide = PongPlayer.PlayerRight;
-            string[] joinParts = message.Split('|');
-            if (joinParts.Length >= 2)
+            if (isNewRemote)
             {
-                TryParseSide(joinParts[1], out requestedSide);
+                player.Side = assignedSide;
+                Debug.Log("[Server] Auto-assigned " + endpointKey + " to " + player.Side);
             }
 
-            player.Side = requestedSide;
             SendSideAssignment(player);
 
             if (!matchActive && remotePlayers.Count > 0)
@@ -486,7 +513,7 @@ public class PongServerManager : MonoBehaviour
                 matchActive = true;
                 ResetMatch(true);
             }
-            else if (previousSide != player.Side || GetPlayerCount(player.Side) > 1)
+            else if (isNewRemote || previousSide != player.Side || GetPlayerCount(player.Side) > 1)
             {
                 RefreshSideAssignments(player.Side);
                 if (previousSide != player.Side)
