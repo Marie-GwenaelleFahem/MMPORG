@@ -19,6 +19,16 @@ public class PongNetworkSession : MonoBehaviour
     public bool IsMatchActive => (ServerManager != null && ServerManager.IsMatchActive) ||
                                  (ClientManager != null && ClientManager.IsMatchActive);
 
+    public float CurrentCountdown
+    {
+        get
+        {
+            if (ServerManager != null && ServerManager.gameObject.activeSelf) return ServerManager.CountdownRemaining;
+            if (ClientManager != null && ClientManager.gameObject.activeSelf) return ClientManager.CurrentCountdown;
+            return 0f;
+        }
+    }
+
     // Returns true if we are in a network session (either as host or client).
     public bool IsNetworkSession => (ServerManager != null && ServerManager.gameObject.activeSelf) ||
                                     (ClientManager != null && ClientManager.gameObject.activeSelf);
@@ -187,7 +197,7 @@ public class PongNetworkSession : MonoBehaviour
 
     public void RequestReplay()
     {
-        if (ServerManager != null && ServerManager.gameObject.activeSelf) ServerManager.ResetMatch(true);
+        if (ServerManager != null && ServerManager.gameObject.activeSelf) ServerManager.StartCountdown();
         else if (ClientManager != null && ClientManager.gameObject.activeSelf) ClientManager.RequestReplay();
     }
 

@@ -29,8 +29,10 @@ public class PongClientManager : MonoBehaviour
     private float lastHostPacketAt;
     private bool matchActive = false;
     private bool hostResponded = false;
+    private float currentCountdown = 0f;
 
     public bool IsMatchActive => matchActive;
+    public float CurrentCountdown => currentCountdown;
 
     public void StartClient(string ip)
     {
@@ -149,8 +151,10 @@ public class PongClientManager : MonoBehaviour
 
     private void ApplyState(PongMatchState state)
     {
+        currentCountdown = state.Countdown;
         PaddleLeft.transform.position = new Vector3(PaddleLeft.transform.position.x, state.PaddleLeftY, PaddleLeft.transform.position.z);
         PaddleRight.transform.position = new Vector3(PaddleRight.transform.position.x, state.PaddleRightY, PaddleRight.transform.position.z);
         Ball.ApplyNetworkState(new Vector3(state.BallX, state.BallY, Ball.transform.position.z), state.BallState);
+        Ball.SetSimulate(currentCountdown <= 0);
     }
 }

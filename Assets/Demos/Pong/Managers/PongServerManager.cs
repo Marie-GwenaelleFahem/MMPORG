@@ -26,8 +26,11 @@ public class PongServerManager : MonoBehaviour
     private float lastBeaconSentAt;
     private float remoteClientInput;
     private bool matchActive = false;
+    private float countdownRemaining = 0f;
 
     public bool IsMatchActive => matchActive;
+    public bool IsCountingDown => countdownRemaining > 0;
+    public float CountdownRemaining => countdownRemaining;
 
     public void StartServer()
     {
@@ -66,6 +69,20 @@ public class PongServerManager : MonoBehaviour
 
         if (matchActive && clientEndpoint != null)
         {
+            if (IsCountingDown)
+            {
+                countdownRemaining -= Time.unscaledDeltaTime;
+                if (countdownRemaining <= 0)
+                {
+                    countdownRemaining = 0;
+                    ResetMatch(sendToClient: true);
+                }
+                else
+                {
+                    Ball.SetSimulate(false); // Ensure ball doesn't move during countdown
+                }
+            }
+
             // Apply remote input to the right paddle
             Vector3 rightPos = PaddleRight.transform.position;
             rightPos.y = Mathf.Clamp(
@@ -106,7 +123,7 @@ public class PongServerManager : MonoBehaviour
             if (matchActive)
             {
                 Debug.Log("[Server] Client connected!");
-                ResetMatch(sendToClient: true);
+                StartCountdown();
             }
             else
             {
@@ -116,9 +133,17 @@ public class PongServerManager : MonoBehaviour
         }
     }
 
+    public void StartCountdown()
+    {
+        countdownRemaining = 3f;
+        ResetMatch(sendToClient: true);
+        Ball.SetSimulate(false); // Ball should not move during countdown
+    }
+
     public void ResetMatch(bool sendToClient)
     {
         Ball.ResetBall();
+        Ball.SetSimulate(!IsCountingDown);
         ResetPaddles();
         remoteClientInput = 0f;
 
@@ -133,12 +158,15 @@ public class PongServerManager : MonoBehaviour
     {
         PaddleLeft.transform.position = new Vector3(PaddleLeft.transform.position.x, 0, PaddleLeft.transform.position.z);
         PaddleRight.transform.position = new Vector3(PaddleRight.transform.position.x, 0, PaddleRight.transform.position.z);
+        PaddleLeft.enabled = true; // Ensure paddles are enabled
+        PaddleRight.enabled = true;
     }
 
     private void FreezeGame()
     {
         Ball.SetSimulate(false);
         PaddleLeft.enabled = false;
+        countdownRemaining = 0; // Cancel countdown if someone disconnects
     }
 
     private void BroadcastState()
@@ -149,7 +177,8 @@ public class PongServerManager : MonoBehaviour
             BallY = Ball.transform.position.y,
             PaddleLeftY = PaddleLeft.transform.position.y,
             PaddleRightY = PaddleRight.transform.position.y,
-            BallState = Ball.State
+            BallState = Ball.State,
+            Countdown = countdownRemaining
         };
 
         udp.SendToEndpoint(state.ToString() + "\n", clientEndpoint);
@@ -185,7 +214,7 @@ public class PongServerManager : MonoBehaviour
         }
         else if (message.StartsWith("R", System.StringComparison.Ordinal))
         {
-            ResetMatch(sendToClient: true);
+            StartCountdown();
         }
     }
 }

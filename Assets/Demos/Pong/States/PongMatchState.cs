@@ -14,6 +14,7 @@ public class PongMatchState
     public float PaddleLeftY;
     public float PaddleRightY;
     public PongBallState BallState;
+    public float Countdown;
 
     // Converts the current state into a network-ready string.
     public override string ToString()
@@ -25,7 +26,8 @@ public class PongMatchState
             BallY.ToString("F4", CultureInfo.InvariantCulture),
             PaddleLeftY.ToString("F4", CultureInfo.InvariantCulture),
             PaddleRightY.ToString("F4", CultureInfo.InvariantCulture),
-            ((int)BallState).ToString(CultureInfo.InvariantCulture)
+            ((int)BallState).ToString(CultureInfo.InvariantCulture),
+            Countdown.ToString("F2", CultureInfo.InvariantCulture)
         });
     }
 
@@ -35,7 +37,7 @@ public class PongMatchState
         if (string.IsNullOrEmpty(message)) return false;
 
         string[] parts = message.Split('|');
-        if (parts.Length < 6 || parts[0] != "S") return false;
+        if (parts.Length < 7 || parts[0] != "S") return false;
 
         try
         {
@@ -48,6 +50,8 @@ public class PongMatchState
             BallState = Enum.IsDefined(typeof(PongBallState), stateInt)
                 ? (PongBallState)stateInt
                 : PongBallState.Playing;
+
+            Countdown = float.Parse(parts[6], NumberStyles.Float, CultureInfo.InvariantCulture);
 
             return true;
         }

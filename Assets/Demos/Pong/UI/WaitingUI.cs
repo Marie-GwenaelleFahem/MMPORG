@@ -46,10 +46,12 @@ public class WaitingUI : MonoBehaviour
         if (GameNetworkManager.Instance == null || PongNetworkSession.Instance == null) return;
 
         bool isHostWaiting = GameNetworkManager.Instance.IsHost && !GameNetworkManager.Instance.IsClientConnected;
-
         bool isClientWaiting = !GameNetworkManager.Instance.IsHost && !GameNetworkManager.Instance.IsClientConnected && !PongNetworkSession.Instance.IsInMenu;
 
-        bool shouldDisplayWaitingPanel = isHostWaiting || isClientWaiting;
+        float countdown = PongNetworkSession.Instance.CurrentCountdown;
+        bool isCountingDown = countdown > 0;
+
+        bool shouldDisplayWaitingPanel = isHostWaiting || isClientWaiting || isCountingDown;
 
         if (shouldDisplayWaitingPanel)
         {
@@ -57,16 +59,25 @@ public class WaitingUI : MonoBehaviour
             {
                 if (!WaitingPanel.activeSelf)
                 {
-                    Debug.Log("[WaitingUI] ACTIVATE: Connection lost or waiting for player.");
+                    Debug.Log("[WaitingUI] ACTIVATE: Connection lost, waiting for player, or counting down.");
                     WaitingPanel.SetActive(true);
                 }
 
                 if (StatusText != null)
-                    StatusText.text = isHostWaiting ? "En attente d'un deuxième joueur......" : "Connection au host perdue...";
+                {
+                    if (isCountingDown)
+                    {
+                        StatusText.text = $"La partie commence dans {Mathf.CeilToInt(countdown)}";
+                    }
+                    else
+                    {
+                        StatusText.text = isHostWaiting ? "En attente d'un autre joueur......" : "En attente d'un autre joueur...";
+                    }
+                }
             }
 
-            // Freeze the game while waiting
-            Time.timeScale = 0;
+            // Freeze the game while waiting, but allow it to run during countdown
+            Time.timeScale = isCountingDown ? 1 : 0;
         }
         else
         {
