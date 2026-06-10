@@ -31,6 +31,8 @@ public class PongNetworkSession : MonoBehaviour
     const float ClientTimeout = 3f;
     const float DiscoveryBeaconInterval = 1f;
     const float DiscoveryStaleTime = 3f;
+    const float CountdownStepDuration = 1f;
+    const float CountdownGoDuration = 0.7f;
 
     static PongNetworkSession _instance;
 
@@ -38,6 +40,19 @@ public class PongNetworkSession : MonoBehaviour
     public bool IsNetworkSession => mode != NetMode.Offline;
     public bool IsInMenu => mode == NetMode.Offline;
     public bool IsMatchActive => matchActive;
+    public bool IsCountdownActive => countdownActive;
+    public string CountdownText
+    {
+        get
+        {
+            if (!countdownActive)
+            {
+                return "";
+            }
+
+            return countdownShowingGo ? "GO!" : countdownNumber.ToString(CultureInfo.InvariantCulture);
+        }
+    }
     public PongPlayer LocalSide => localSide;
     public float LocalSpeedShare => localSpeedShare;
     public int LocalSidePlayerCount => localSidePlayerCount;
@@ -60,6 +75,10 @@ public class PongNetworkSession : MonoBehaviour
     float lastClientPacketAt;
     float lastBeaconSentAt;
     bool matchActive;
+    bool countdownActive;
+    bool countdownShowingGo;
+    int countdownNumber = 3;
+    float countdownNextStepAt;
     string statusMessage = "";
     int statesReceived;
     int joinPacketsSent;
@@ -184,6 +203,8 @@ public class PongNetworkSession : MonoBehaviour
         {
             CacheSceneRefs();
         }
+
+        UpdateCountdown();
 
         if (mode == NetMode.Offline)
         {
@@ -530,6 +551,69 @@ public class PongNetworkSession : MonoBehaviour
         if (matchActive)
         {
             NotifyLocalSideAssignment();
+            BeginRoundCountdown();
+        }
+    }
+
+    void BeginRoundCountdown()
+    {
+        if (!IsNetworkSession)
+        {
+            return;
+        }
+
+        countdownActive = true;
+        countdownShowingGo = false;
+        countdownNumber = 3;
+        countdownNextStepAt = Time.time + CountdownStepDuration;
+        ApplyBallSimulation();
+    }
+
+    void UpdateCountdown()
+    {
+        if (!countdownActive || Time.time < countdownNextStepAt)
+        {
+            return;
+        }
+
+        if (countdownShowingGo)
+        {
+            countdownActive = false;
+            countdownShowingGo = false;
+            ApplyBallSimulation();
+            return;
+        }
+
+        countdownNumber--;
+        if (countdownNumber <= 0)
+        {
+            countdownShowingGo = true;
+            countdownNextStepAt = Time.time + CountdownGoDuration;
+        }
+        else
+        {
+            countdownNextStepAt = Time.time + CountdownStepDuration;
+        }
+    }
+
+    void ApplyBallSimulation()
+    {
+        if (!HasSceneRefs())
+        {
+            return;
+        }
+
+        switch (mode)
+        {
+            case NetMode.Offline:
+                ball.SetSimulate(true);
+                break;
+            case NetMode.Host:
+                ball.SetSimulate(matchActive && !countdownActive);
+                break;
+            case NetMode.Client:
+                ball.SetSimulate(false);
+                break;
         }
     }
 
@@ -600,6 +684,8 @@ public class PongNetworkSession : MonoBehaviour
 
     public void StopSession(bool showMenu = false)
     {
+        countdownActive = false;
+        countdownShowingGo = false;
         ShutdownNetwork();
         matchActive = false;
         remotePlayers.Clear();
@@ -734,12 +820,12 @@ public class PongNetworkSession : MonoBehaviour
             case NetMode.Host:
                 paddleLeft.enabled = false;
                 paddleRight.enabled = false;
-                ball.SetSimulate(matchActive);
+                ApplyBallSimulation();
                 break;
             case NetMode.Client:
                 paddleLeft.enabled = false;
                 paddleRight.enabled = false;
-                ball.SetSimulate(false);
+                ApplyBallSimulation();
                 break;
         }
     }
