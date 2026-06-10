@@ -1,14 +1,9 @@
-using System.Collections.Generic;
+using System;
+using System.Globalization;
 using System.Net;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using System.Globalization;
 
-/*
-* Manages the client-side logic for a Pong match.
-* Responsible for: Discovering servers, joining a host, 
-* sending player inputs, and applying state updates from the server.
-*/
 public class PongClientManager : MonoBehaviour
 {
     [Header("Network Settings")]
@@ -24,13 +19,20 @@ public class PongClientManager : MonoBehaviour
 
     public struct ServerInfo { public string Name; public string IP; public float LastSeen; }
 
-    private UDPService udp;
-    private float lastInputSentAt;
-    private float lastHostPacketAt;
-    private bool matchActive = false;
-    private bool hostResponded = false;
+    PongPlayer joinSide = PongPlayer.PlayerRight;
+
+    UDPService udp;
+    float lastInputSentAt;
+    float lastHostPacketAt;
+    bool matchActive;
+    bool hostResponded;
 
     public bool IsMatchActive => matchActive;
+
+    public void SetJoinSide(PongPlayer side)
+    {
+        joinSide = side;
+    }
 
     public void StartClient(string ip)
     {
@@ -39,8 +41,7 @@ public class PongClientManager : MonoBehaviour
         if (udp == null) udp = GetComponent<UDPService>();
         if (udp == null) udp = gameObject.AddComponent<UDPService>();
 
-        bool ok = udp.Bind(0, OnMessageReceived);
-        if (!ok)
+        if (!udp.Bind(0, OnMessageReceived))
         {
             Debug.LogError("[Client] Failed to bind client port.");
             return;
@@ -50,22 +51,28 @@ public class PongClientManager : MonoBehaviour
         hostResponded = false;
         lastHostPacketAt = Time.unscaledTime;
         SendJoinPacket();
-        Debug.Log($"[Client] Attempting to join {ServerIP}:{ServerPort}");
+        Debug.Log("[Client] Joining " + ServerIP + ":" + ServerPort + " as " + joinSide);
     }
 
     public void StopClient()
     {
-        if (udp != null) udp.CloseUDP();
+        if (udp != null)
+        {
+            udp.CloseUDP();
+        }
+
         matchActive = false;
     }
 
-    private void Update()
+    void Update()
     {
-        if (udp == null || !udp.IsBound) return;
+        if (udp == null || !udp.IsBound)
+        {
+            return;
+        }
 
         if (matchActive)
         {
-            // Uses unscaledTime because the game might be paused while waiting
             if (Time.unscaledTime - lastHostPacketAt > HostTimeout)
             {
                 Debug.Log("[Client] Host timed out!");
@@ -75,22 +82,25 @@ public class PongClientManager : MonoBehaviour
 
             SendInput();
         }
-        else if (hostResponded || Time.unscaledTime - lastInputSentAt > 1.0f)
+        else if (hostResponded || Time.unscaledTime - lastInputSentAt > 1f)
         {
-            // Keep trying to join until match is active
             SendJoinPacket();
         }
     }
 
-    private void SendJoinPacket()
+    void SendJoinPacket()
     {
-        udp.SendToHost("J\n", ServerIP, ServerPort);
+        string sideToken = joinSide == PongPlayer.PlayerLeft ? "L" : "R";
+        udp.SendToHost("J|" + sideToken + "\n", ServerIP, ServerPort);
         lastInputSentAt = Time.unscaledTime;
     }
 
-    private void SendInput()
+    void SendInput()
     {
-        if (Time.unscaledTime - lastInputSentAt < SendInterval) return;
+        if (Time.unscaledTime - lastInputSentAt < SendInterval)
+        {
+            return;
+        }
 
         float axis = 0f;
         if (Keyboard.current != null)
@@ -108,35 +118,35 @@ public class PongClientManager : MonoBehaviour
         udp.SendToHost("R\n", ServerIP, ServerPort);
     }
 
-    private void HandleHostMigration()
+    void HandleHostMigration()
     {
         StopClient();
         if (GameNetworkManager.Instance != null)
         {
             GameNetworkManager.Instance.SetHostMode(true);
-            // The GameNetworkManager or a wrapper should now start the ServerManager
             SendMessageUpwards("OnHostMigrationTriggered", SendMessageOptions.DontRequireReceiver);
         }
     }
 
-    private void OnMessageReceived(string message, IPEndPoint from)
+    void OnMessageReceived(string message, IPEndPoint from)
     {
         lastHostPacketAt = Time.unscaledTime;
 
-        if (message.StartsWith("A", System.StringComparison.Ordinal))
+        if (message.StartsWith("A", StringComparison.Ordinal))
         {
             hostResponded = true;
+            ApplyAssignmentFromHost(message);
             return;
         }
 
-        if (message.StartsWith("R", System.StringComparison.Ordinal))
+        if (message.StartsWith("R", StringComparison.Ordinal))
         {
             matchActive = true;
-            Ball.ResetBall();
+            ResetLocalRound();
             return;
         }
 
-        if (message.StartsWith("S|", System.StringComparison.Ordinal))
+        if (message.StartsWith("S|", StringComparison.Ordinal))
         {
             matchActive = true;
             PongMatchState state = new PongMatchState();
@@ -147,7 +157,50 @@ public class PongClientManager : MonoBehaviour
         }
     }
 
-    private void ApplyState(PongMatchState state)
+    void ApplyAssignmentFromHost(string message)
+    {
+        string[] parts = message.Split('|');
+        if (parts.Length < 4 || parts[0] != "A")
+        {
+            return;
+        }
+
+        PongPlayer side = PongPlayer.PlayerRight;
+        if (parts[1].Equals("L", StringComparison.OrdinalIgnoreCase))
+        {
+            side = PongPlayer.PlayerLeft;
+        }
+
+        if (!float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float share))
+        {
+            return;
+        }
+
+        if (!int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out int count))
+        {
+            return;
+        }
+
+        if (PongNetworkSession.Instance != null)
+        {
+            PongNetworkSession.Instance.SetSideAssignment(side, share, count, true);
+        }
+    }
+
+    void ResetLocalRound()
+    {
+        if (Ball != null)
+        {
+            Ball.ResetBall();
+        }
+
+        if (PongNetworkSession.Instance != null)
+        {
+            PongNetworkSession.Instance.BeginRoundCountdown();
+        }
+    }
+
+    void ApplyState(PongMatchState state)
     {
         PaddleLeft.transform.position = new Vector3(PaddleLeft.transform.position.x, state.PaddleLeftY, PaddleLeft.transform.position.z);
         PaddleRight.transform.position = new Vector3(PaddleRight.transform.position.x, state.PaddleRightY, PaddleRight.transform.position.z);

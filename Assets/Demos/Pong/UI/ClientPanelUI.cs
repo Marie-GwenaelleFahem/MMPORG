@@ -10,6 +10,9 @@ public class ClientPanelUI : MonoBehaviour
     public GameObject GameEntryPrefab;  // A button prefab with a text component
     public TMP_Text EmptyListMessage;   // A text object that says "No games found"
 
+    [Header("Join Settings")]
+    public PongPlayer SelectedSide = PongPlayer.PlayerRight;
+
     private float _lastRefreshTime;
 
     private void OnEnable()
@@ -78,9 +81,19 @@ public class ClientPanelUI : MonoBehaviour
         }
     }
 
+    public void SelectJoinSideLeft()
+    {
+        SelectedSide = PongPlayer.PlayerLeft;
+    }
+
+    public void SelectJoinSideRight()
+    {
+        SelectedSide = PongPlayer.PlayerRight;
+    }
+
     private void OnGameSelected(string ip)
     {
-        Debug.Log($"Joining game at {ip}...");
-        GameNetworkManager.Instance.JoinGame(ip);
+        Debug.Log($"Joining game at {ip} as {SelectedSide}...");
+        GameNetworkManager.Instance.JoinGame(ip, SelectedSide);
     }
 }
