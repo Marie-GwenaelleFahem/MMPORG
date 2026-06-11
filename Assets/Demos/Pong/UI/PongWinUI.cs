@@ -73,4 +73,9 @@ public class PongWinUI : MonoBehaviour
 
     SceneManager.LoadScene(SceneManager.GetActiveScene().name);
   }
+
+  public void OnReturnToMenu()
+  {
+    PongNetworkSession.Instance?.StopSession(true);
+  }
 }
