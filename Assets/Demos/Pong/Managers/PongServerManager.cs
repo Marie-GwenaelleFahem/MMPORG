@@ -276,8 +276,7 @@ public class PongServerManager : MonoBehaviour
             Ball.SetSimulate(false);
         }
 
-        RefreshSideAssignments(PongPlayer.PlayerLeft);
-        RefreshSideAssignments(PongPlayer.PlayerRight);
+        RedispatchAllSides(true);
 
         if (sendToClients)
         {
@@ -358,11 +357,8 @@ public class PongServerManager : MonoBehaviour
         return false;
     }
 
-    PongPlayer PickBalancedSide()
+    static PongPlayer PickSideForCounts(int leftCount, int rightCount, int tieBreakIndex)
     {
-        int leftCount = GetPlayerCount(PongPlayer.PlayerLeft);
-        int rightCount = GetPlayerCount(PongPlayer.PlayerRight);
-
         if (leftCount < rightCount)
         {
             return PongPlayer.PlayerLeft;
@@ -373,10 +369,50 @@ public class PongServerManager : MonoBehaviour
             return PongPlayer.PlayerRight;
         }
 
-        // Égalité : alterner (1er client → droite car gauche = host)
-        return remotePlayers.Count % 2 == 0
+        return tieBreakIndex % 2 == 0
             ? PongPlayer.PlayerRight
             : PongPlayer.PlayerLeft;
+    }
+
+    PongPlayer PickBalancedSide()
+    {
+        return PickSideForCounts(
+            GetPlayerCount(PongPlayer.PlayerLeft),
+            GetPlayerCount(PongPlayer.PlayerRight),
+            remotePlayers.Count);
+    }
+
+    void RedispatchAllSides(bool showAnnouncement)
+    {
+        if (remotePlayers.Count == 0)
+        {
+            RefreshHostSideAssignment(showAnnouncement);
+            return;
+        }
+
+        var ordered = new List<RemotePlayer>(remotePlayers.Values);
+        ordered.Sort((a, b) => string.CompareOrdinal(EndpointKey(a.Endpoint), EndpointKey(b.Endpoint)));
+
+        int leftCount = 1;
+        int rightCount = 0;
+
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            PongPlayer side = PickSideForCounts(leftCount, rightCount, i);
+            ordered[i].Side = side;
+
+            if (side == PongPlayer.PlayerLeft)
+            {
+                leftCount++;
+            }
+            else
+            {
+                rightCount++;
+            }
+        }
+
+        RefreshSideAssignments(PongPlayer.PlayerLeft, showAnnouncement);
+        RefreshSideAssignments(PongPlayer.PlayerRight, showAnnouncement);
     }
 
     RemotePlayer GetOrCreateRemotePlayer(IPEndPoint from)
@@ -411,7 +447,7 @@ public class PongServerManager : MonoBehaviour
         PongNetworkSession.Instance.SetSideAssignment(PongPlayer.PlayerLeft, share, count, showAnnouncement);
     }
 
-    void RefreshSideAssignments(PongPlayer side)
+    void RefreshSideAssignments(PongPlayer side, bool showAnnouncement = true)
     {
         int count = GetPlayerCount(side);
         if (count <= 0)
@@ -439,7 +475,7 @@ public class PongServerManager : MonoBehaviour
 
         if (side == PongPlayer.PlayerLeft)
         {
-            RefreshHostSideAssignment(true);
+            RefreshHostSideAssignment(showAnnouncement);
         }
     }
 
