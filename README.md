@@ -1,84 +1,104 @@
-# 🏓 MMPong - Massive Multiplayer Pong
+# MMPong — Massive Multiplayer Pong
 
-## Le Jeu
+Réinvention multijoueur du Pong classique. Les joueurs rejoignent une partie en réseau local et contrôlent **collectivement** une palette : plus de joueurs appuient simultanément sur une direction, plus la palette accélère.
 
-**MMPong** est une réinvention multijoueur du classique Pong. Un jeu en temps réel où les joueurs se connectent en réseau pour contrôler collectivement les palettes et affronter l'adversaire.
+## Gameplay
 
-### 🎮 Gameplay
+- Un joueur héberge la partie (Host) depuis le menu principal
+- Les autres joueurs rejoignent en choisissant un côté : **Gauche** ou **Droite**
+- Les inputs de tous les joueurs d'un même côté sont agrégés — la vitesse de déplacement est proportionnelle au nombre d'inputs actifs simultanément
+- Un compte à rebours (3-2-1-GO) lance la manche ; la balle repart au centre après chaque point
 
-**Contrôle Collectif des Palettes** :
-- Les joueurs se connectent et choisissent : **Palette Gauche** ou **Palette Droite**
-- Plus il y a de joueurs qui appuient **simultanément** sur une direction, plus la palette se déplace **rapidement**
-- La dynamique du jeu change en temps réel selon le nombre de joueurs actifs
-- **4+ joueurs** en réseau pour une expérience vraiment multijoueur
+### Contrôles
 
-### ⌨️ Contrôles
-
-- **Palette Gauche** : `Z` (Haut) / `S` (Bas)
-- **Palette Droite** : `↑ Haut` / `↓ Bas`
+- **Palette Gauche** : `Z` (haut) / `S` (bas)
+- **Palette Droite** : `↑` (haut) / `↓` (bas)
 
 ---
 
-## 🚀 Quick Start
+## Lancer le projet
 
-### Prérequis
-- **Unity 3D** 2021 LTS ou supérieur
-- **C#** et notions de TCP/UDP
-- **Git**
-
-### Installation
+**Prérequis** : Unity 6 (6000.0.x recommandé), Git
 
 ```bash
-# Clonez le dépôt
-git clone [repo-url]
-cd MMPORG
-
-# Ouvrez dans Unity 3D
-# Assets > Open Scene > Demos > Pong > Pong.unity
+git clone <repo-url>
 ```
 
-### Lancer le Jeu
+Ouvrir `Assets/Demos/Pong/Pong.unity` dans l'éditeur Unity, puis **Play**.
 
-1. Ouvrez `Assets/Demos/Pong/Pong.unity` dans l'éditeur Unity
-2. Appuyez sur **Play** pour tester le jeu
-3. Utilisez les contrôles ci-dessus
+- Pour héberger : cliquer **Host** dans le menu
+- Pour rejoindre : cliquer **Join**, sélectionner le serveur découvert automatiquement, choisir son côté
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-Le projet utilise une architecture **client-serveur** avec synchronisation en temps réel via **TCP/UDP**.
-
-### Démos Incluses
-- **TCP Example** : `Assets/Demos/TCP/TCP.unity` - Communication TCP basique
-- **UDP Example** : `Assets/Demos/UDP/UDP.unity` - Communication UDP basique
-
-### Structure du Code
+Architecture **client-serveur UDP** en réseau local.
 
 ```
-Assets/
-├── Demos/
-│   ├── Pong/           # Scène principale du jeu
-│   ├── TCP/            # Exemple TCP
-│   └── UDP/            # Exemple UDP
-├── Settings/           # Configuration du projet
-└── InputSystem_Actions # Système d'entrée
+Assets/Demos/Pong/
+├── Managers/
+│   ├── GameNetworkManager.cs     # Singleton UI↔réseau ; stocke mode host/client et IP
+│   ├── PongServerManager.cs      # Serveur autoritaire : simulation, broadcast état
+│   └── PongClientManager.cs      # Client : envoi input, application état reçu
+├── States/
+│   └── PongMatchState.cs         # Conteneur sérialisable : pos balle, palettes, état
+├── UDP/
+│   └── UDPService.cs             # Couche UDP bas niveau (bind, send, receive, broadcast)
+├── UI/
+│   ├── MenuController.cs         # Navigation entre panneaux menu
+│   ├── HostPanelUI.cs            # Sélection difficulté, démarrage hôte
+│   ├── ClientPanelUI.cs          # Liste serveurs découverts, sélection côté
+│   ├── PongSideAssignmentUI.cs   # Affiche l'assignation de côté en début de manche
+│   ├── PongWinUI.cs              # Écran de fin de manche
+│   └── WaitingUI.cs              # Attente de connexions
+├── Input/
+│   └── PongInput.cs              # Auto-généré depuis InputSystem (Player1 / Player2)
+├── PongNetworkSession.cs         # Orchestrateur de session ; crée Server/ClientManager
+├── PongBall.cs                   # Physique balle, détection collisions, états victoire
+├── PongPaddle.cs                 # Déplacement palette, lecture input, multiplicateur vitesse
+├── PongRoundFlow.cs              # Machine à états compte à rebours et assignation côtés
+├── PongCountdownUI.cs            # Overlay "3-2-1-GO"
+├── PongPaddleInput.cs            # Helper statique : lecture clavier → axe [-1, +1]
+└── PongNetworkPorts.cs           # Constantes : GamePort=25000, DiscoveryPort=25001
 ```
+
+### Flux réseau
+
+**Ports** : `25000` (jeu), `25001` (découverte LAN)
+
+**Découverte** : le serveur broadcast un beacon sur `25001` ; les clients écoutent et affichent automatiquement les parties disponibles.
+
+**Protocole texte** (messages délimités par `\n`) :
+
+| Direction | Format | Signification |
+|-----------|--------|---------------|
+| Client → Serveur | `J\|L` / `J\|R` | Demande de rejoindre (côté gauche/droite) |
+| Serveur → Client | `A\|L\|0.5\|2` | Assignation : côté, part de vitesse, nb joueurs |
+| Client → Serveur | `I\|0.5` | Input : axe de déplacement [-1, +1] |
+| Serveur → Clients | `S\|bx\|by\|pl\|pr\|state` | État du jeu : pos balle, palettes Y, état balle |
+| Serveur → Clients | `R` | Reset de manche |
+| Serveur (broadcast) | `B\|PongHost\|25000` | Beacon de découverte |
+
+**Agrégation des inputs** : chaque joueur contribue `1/nb_joueurs_côté` à la vitesse de sa palette. Le serveur est autoritaire — il simule la balle et broadcast l'état toutes les 20 ms (~50 Hz).
+
+### Patterns clés
+
+- **Singleton persistant** : `GameNetworkManager` et `PongNetworkSession` survivent au chargement de scène (`DontDestroyOnLoad`)
+- **Séparation simulation/affichage** : seul le serveur simule la physique ; les clients appliquent l'état reçu
+- **Round flow** : `PongRoundFlow` gère le compte à rebours puis déverrouille le gameplay
 
 ---
 
-## 💻 Technologies
+## Stack
 
-- **Engine** : Unity 3D
+- **Engine** : Unity 6
 - **Langage** : C#
-- **Réseau** : TCP/UDP (protocole personnalisé)
-- **Versioning** : Git
+- **Réseau** : UDP custom (pas de Netcode for GameObjects, pas de Mirror)
+- **Input** : Unity Input System
 
 ---
 
-## � Équipe
+## Équipe
 
-**Groupe 5**
-- Waris
-- Benjamin
-- Marie-Gwenaëlle
+Groupe 5 — Waris, Benjamin, Marie-Gwenaëlle
