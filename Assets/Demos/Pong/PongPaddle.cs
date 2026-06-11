@@ -59,11 +59,19 @@ public class PongPaddle : MonoBehaviour
         return;
       }
 
+      float speedMultiplier = 1f;
+      if (PongNetworkSession.Instance != null)
+      {
+        speedMultiplier = PongNetworkSession.Instance.GetPaddleSpeedMultiplier(Player);
+        if (speedMultiplier <= 0f)
+        {
+          return;
+        }
+      }
+
       float direction = PlayerAction.ReadValue<float>();
-
-      Vector3 newPos = transform.position + (Vector3.up * Speed * direction * Time.deltaTime);
+      Vector3 newPos = transform.position + (Vector3.up * Speed * speedMultiplier * direction * Time.deltaTime);
       newPos.y = Mathf.Clamp(newPos.y, MinY, MaxY);
-
       transform.position = newPos;
     }
 
