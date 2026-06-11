@@ -1,9 +1,6 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-/// <summary>
-/// Affiche le decompte 3, 2, 1, GO! au centre de l'ecran avant le debut d'une manche.
-/// </summary>
 public class PongCountdownUI : MonoBehaviour
 {
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -51,7 +48,7 @@ public class PongCountdownUI : MonoBehaviour
 
         float size = 200f;
         float x = (Screen.width - size) * 0.5f;
-        float y = (Screen.height - size) * 0.4f;
+        float y = Screen.height * 0.4f;
         GUI.Label(new Rect(x, y, size, size), text, style);
     }
 }

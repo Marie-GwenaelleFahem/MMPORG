@@ -1,17 +1,23 @@
+using System;
 using System.Collections.Generic;
-using System.Net;
-using UnityEngine;
 using System.Globalization;
-
-/// <summary>
-/// Manages the server-side logic for a Pong match.
-/// Responsible for: Broadcasting beacons, accepting connections, 
-/// processing client inputs, and broadcasting the match state.
-/// </summary>
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using UnityEngine;
 public class PongServerManager : MonoBehaviour
 {
+    class RemotePlayer
+    {
+        public IPEndPoint Endpoint;
+        public PongPlayer Side;
+        public float LastInput;
+        public float LastPacketAt;
+    }
+
     [Header("Network Settings")]
-    public int ListenPort = 25000;
+    public int ListenPort = PongNetworkPorts.GamePort;
+    public int DiscoveryPort = PongNetworkPorts.DiscoveryPort;
     public float StateSendInterval = 0.02f;
     public float ClientTimeout = 3f;
 
@@ -20,127 +26,289 @@ public class PongServerManager : MonoBehaviour
     public PongPaddle PaddleRight;
     public PongBall Ball;
 
-    private UDPService udp;
-    private IPEndPoint clientEndpoint;
-    private float lastStateSentAt;
-    private float lastClientPacketAt;
-    private float lastBeaconSentAt;
-    private float remoteClientInput;
-    private bool matchActive = false;
+    readonly Dictionary<string, RemotePlayer> remotePlayers = new Dictionary<string, RemotePlayer>();
+
+    UDPService udp;
+    UdpClient beaconSender;
+    float lastStateSentAt;
+    float lastBeaconSentAt;
+    bool matchActive;
 
     public bool IsMatchActive => matchActive;
 
     public void StartServer()
     {
-        udp = GetComponentInParent<UDPService>();
-        if (udp == null) udp = GetComponent<UDPService>();
-        if (udp == null) udp = gameObject.AddComponent<UDPService>();
-
-        bool ok = udp.Bind(ListenPort, OnMessageReceived);
-        if (!ok)
+        udp = EnsureUdp();
+        if (!udp.Bind(ListenPort, OnMessageReceived))
         {
-            Debug.LogError($"[Server] Failed to bind to port {ListenPort}");
+            Debug.LogError("[Server] Failed to bind to port " + ListenPort);
             return;
         }
 
         matchActive = false;
-        clientEndpoint = null;
-        Debug.Log($"[Server] Started listening on port {ListenPort}");
+        remotePlayers.Clear();
+        Debug.Log("[Server] Started listening on port " + ListenPort);
+        RefreshHostSideAssignment(false);
     }
 
     public void StopServer()
     {
         if (udp != null)
         {
-            udp.Close();
+            udp.CloseUDP();
         }
+
+        CloseBeaconSender();
+
         matchActive = false;
-        clientEndpoint = null;
+        remotePlayers.Clear();
+        SetGameplayActive(false);
     }
 
-    private void Update()
+    void Update()
     {
-        if (udp == null || !udp.IsBound) return;
+        if (udp == null || !udp.IsBound)
+        {
+            return;
+        }
 
         SendDiscoveryBeacon();
+        RemoveStalePlayers();
         UpdateMatchStatus();
 
-        if (matchActive && clientEndpoint != null)
+        if (!matchActive)
         {
-            // Apply remote input to the right paddle
-            Vector3 rightPos = PaddleRight.transform.position;
-            rightPos.y = Mathf.Clamp(
-                rightPos.y + remoteClientInput * PaddleRight.Speed * Time.deltaTime,
-                PaddleRight.MinY,
-                PaddleRight.MaxY);
-            PaddleRight.transform.position = rightPos;
+            return;
+        }
 
-            // Broadcast the state to the client
-            if (Time.time - lastStateSentAt >= StateSendInterval)
-            {
-                BroadcastState();
-                lastStateSentAt = Time.time;
-            }
+        ApplyAggregatedPaddleMovement(PongPlayer.PlayerLeft, PaddleLeft);
+        ApplyAggregatedPaddleMovement(PongPlayer.PlayerRight, PaddleRight);
+
+        if (remotePlayers.Count > 0 && Time.unscaledTime - lastStateSentAt >= StateSendInterval)
+        {
+            BroadcastState();
+            lastStateSentAt = Time.unscaledTime;
         }
     }
 
-    private void SendDiscoveryBeacon()
+    void ApplyAggregatedPaddleMovement(PongPlayer side, PongPaddle paddle)
     {
-        if (Time.time - lastBeaconSentAt < 1.0f) return;
+        if (paddle == null)
+        {
+            return;
+        }
 
-        string message = $"B|PongHost|{ListenPort}";
-        udp.Broadcast(message, ListenPort);
-        udp.Send(message, "127.0.0.1", ListenPort); // Local testing
-        
-        lastBeaconSentAt = Time.time;
+        int count = GetPlayerCount(side);
+        if (count <= 0)
+        {
+            return;
+        }
+
+        float axis = GetAggregatedAxis(side);
+        float shareSpeed = paddle.Speed / count;
+        Vector3 pos = paddle.transform.position;
+        pos.y = Mathf.Clamp(
+            pos.y + axis * shareSpeed * Time.unscaledDeltaTime,
+            paddle.MinY,
+            paddle.MaxY);
+        paddle.transform.position = pos;
     }
 
-    private void UpdateMatchStatus()
+    float GetAggregatedAxis(PongPlayer side)
     {
-        bool opponentConnected = clientEndpoint != null && (Time.time - lastClientPacketAt <= ClientTimeout);
+        float axis = 0f;
 
-        if (opponentConnected != matchActive)
+        if (side == PongPlayer.PlayerLeft)
         {
-            matchActive = opponentConnected;
-            if (matchActive)
+            axis += ReadHostLeftInput();
+        }
+
+        foreach (RemotePlayer player in remotePlayers.Values)
+        {
+            if (player.Side == side)
             {
-                Debug.Log("[Server] Client connected!");
-                ResetMatch(sendToClient: true);
+                axis += player.LastInput;
             }
-            else
+        }
+
+        return axis;
+    }
+
+    static float ReadHostLeftInput()
+    {
+        return PongPaddleInput.ReadVerticalAxis();
+    }
+
+    int GetPlayerCount(PongPlayer side)
+    {
+        int count = side == PongPlayer.PlayerLeft ? 1 : 0;
+        foreach (RemotePlayer player in remotePlayers.Values)
+        {
+            if (player.Side == side)
             {
-                Debug.Log("[Server] Client disconnected or timed out.");
-                FreezeGame();
+                count++;
             }
+        }
+
+        return count;
+    }
+
+    void SendDiscoveryBeacon()
+    {
+        if (Time.unscaledTime - lastBeaconSentAt < 1f)
+        {
+            return;
+        }
+
+        string message = "B|PongHost|" + ListenPort;
+        byte[] bytes = Encoding.UTF8.GetBytes(message);
+        UdpClient sender = EnsureBeaconSender();
+        sender.Send(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort));
+        sender.Send(bytes, bytes.Length, new IPEndPoint(IPAddress.Loopback, DiscoveryPort));
+        lastBeaconSentAt = Time.unscaledTime;
+    }
+
+    UdpClient EnsureBeaconSender()
+    {
+        if (beaconSender != null)
+        {
+            return beaconSender;
+        }
+
+        beaconSender = new UdpClient();
+        beaconSender.EnableBroadcast = true;
+        return beaconSender;
+    }
+
+    void CloseBeaconSender()
+    {
+        if (beaconSender == null)
+        {
+            return;
+        }
+
+        beaconSender.Close();
+        beaconSender = null;
+    }
+
+    void UpdateMatchStatus()
+    {
+        bool opponentConnected = remotePlayers.Count > 0 && HasAnyActiveRemotePlayer();
+        if (opponentConnected == matchActive)
+        {
+            return;
+        }
+
+        matchActive = opponentConnected;
+        if (matchActive)
+        {
+            Debug.Log("[Server] Client(s) connected!");
+            ResetMatch(true);
+        }
+        else
+        {
+            Debug.Log("[Server] No active clients.");
+            SetGameplayActive(false);
         }
     }
 
-    public void ResetMatch(bool sendToClient)
+    bool HasAnyActiveRemotePlayer()
     {
+        foreach (RemotePlayer player in remotePlayers.Values)
+        {
+            if (Time.unscaledTime - player.LastPacketAt <= ClientTimeout)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void RemoveStalePlayers()
+    {
+        var removedSides = new HashSet<PongPlayer>();
+        var keysToRemove = new List<string>();
+
+        foreach (KeyValuePair<string, RemotePlayer> entry in remotePlayers)
+        {
+            if (Time.unscaledTime - entry.Value.LastPacketAt > ClientTimeout)
+            {
+                removedSides.Add(entry.Value.Side);
+                keysToRemove.Add(entry.Key);
+            }
+        }
+
+        foreach (string key in keysToRemove)
+        {
+            remotePlayers.Remove(key);
+        }
+
+        foreach (PongPlayer side in removedSides)
+        {
+            RefreshSideAssignments(side);
+        }
+
+        if (remotePlayers.Count == 0 && matchActive)
+        {
+            matchActive = false;
+            SetGameplayActive(false);
+        }
+    }
+
+    public void ResetMatch(bool sendToClients)
+    {
+        if (Ball == null || PaddleLeft == null || PaddleRight == null)
+        {
+            return;
+        }
+
         Ball.ResetBall();
         ResetPaddles();
-        remoteClientInput = 0f;
 
-        if (sendToClient && clientEndpoint != null)
+        foreach (RemotePlayer player in remotePlayers.Values)
         {
-            udp.Send("R\n", clientEndpoint);
+            player.LastInput = 0f;
+        }
+
+        if (Ball != null)
+        {
+            Ball.SetSimulate(false);
+        }
+
+        RefreshSideAssignments(PongPlayer.PlayerLeft);
+        RefreshSideAssignments(PongPlayer.PlayerRight);
+
+        if (sendToClients)
+        {
+            BroadcastToAll("R\n");
             BroadcastState();
+        }
+
+        if (PongNetworkSession.Instance != null)
+        {
+            PongNetworkSession.Instance.BeginRoundCountdown();
         }
     }
 
-    private void ResetPaddles()
+    void ResetPaddles()
     {
-        PaddleLeft.transform.position = new Vector3(PaddleLeft.transform.position.x, 0, PaddleLeft.transform.position.z);
-        PaddleRight.transform.position = new Vector3(PaddleRight.transform.position.x, 0, PaddleRight.transform.position.z);
+        PaddleLeft.transform.position = new Vector3(PaddleLeft.transform.position.x, 0f, PaddleLeft.transform.position.z);
+        PaddleRight.transform.position = new Vector3(PaddleRight.transform.position.x, 0f, PaddleRight.transform.position.z);
     }
 
-    private void FreezeGame()
+    void SetGameplayActive(bool active)
     {
-        Ball.SetSimulate(false);
-        PaddleLeft.enabled = false;
+        if (Ball != null)
+        {
+            Ball.SetSimulate(active && PongNetworkSession.Instance != null && PongNetworkSession.Instance.IsGameplayUnlocked);
+        }
+
+        if (PaddleLeft != null) PaddleLeft.enabled = false;
+        if (PaddleRight != null) PaddleRight.enabled = false;
     }
 
-    private void BroadcastState()
+    void BroadcastState()
     {
         PongMatchState state = new PongMatchState
         {
@@ -151,40 +319,236 @@ public class PongServerManager : MonoBehaviour
             BallState = Ball.State
         };
 
-        udp.Send(state.ToString() + "\n", clientEndpoint);
+        BroadcastToAll(state.ToString() + "\n");
     }
 
-    private void OnMessageReceived(string message, IPEndPoint from)
+    void BroadcastToAll(string message)
     {
-        // Ignore discovery beacons (don't treat ourselves as a client)
-        if (message.StartsWith("B|", System.StringComparison.Ordinal)) return;
-
-        // Only update the client endpoint if we receive a valid gameplay message
-        bool isGameplayMessage = message.StartsWith("J", System.StringComparison.Ordinal) ||
-                                 message.StartsWith("I|", System.StringComparison.Ordinal) ||
-                                 message.StartsWith("R", System.StringComparison.Ordinal);
-
-        if (isGameplayMessage)
+        foreach (RemotePlayer player in remotePlayers.Values)
         {
-            clientEndpoint = from;
-            lastClientPacketAt = Time.time;
+            udp.SendToEndpoint(message, player.Endpoint);
+        }
+    }
+
+    static string EndpointKey(IPEndPoint endpoint)
+    {
+        return endpoint.Address + ":" + endpoint.Port;
+    }
+
+    static bool TryParseSide(string token, out PongPlayer side)
+    {
+        side = PongPlayer.PlayerRight;
+        if (string.IsNullOrEmpty(token))
+        {
+            return false;
         }
 
-        if (message.StartsWith("J", System.StringComparison.Ordinal))
+        if (token.Equals("L", StringComparison.OrdinalIgnoreCase))
         {
-            udp.Send("A\n", from); // Acknowledge join
+            side = PongPlayer.PlayerLeft;
+            return true;
         }
-        else if (message.StartsWith("I|", System.StringComparison.Ordinal))
+
+        if (token.Equals("R", StringComparison.OrdinalIgnoreCase))
         {
-            string[] parts = message.Split('|');
-            if (parts.Length >= 2 && float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float axis))
+            side = PongPlayer.PlayerRight;
+            return true;
+        }
+
+        return false;
+    }
+
+    PongPlayer PickBalancedSide()
+    {
+        int leftCount = GetPlayerCount(PongPlayer.PlayerLeft);
+        int rightCount = GetPlayerCount(PongPlayer.PlayerRight);
+
+        if (leftCount < rightCount)
+        {
+            return PongPlayer.PlayerLeft;
+        }
+
+        if (rightCount < leftCount)
+        {
+            return PongPlayer.PlayerRight;
+        }
+
+        // Égalité : alterner (1er client → droite car gauche = host)
+        return remotePlayers.Count % 2 == 0
+            ? PongPlayer.PlayerRight
+            : PongPlayer.PlayerLeft;
+    }
+
+    RemotePlayer GetOrCreateRemotePlayer(IPEndPoint from)
+    {
+        string key = EndpointKey(from);
+        if (!remotePlayers.TryGetValue(key, out RemotePlayer player))
+        {
+            player = new RemotePlayer
             {
-                remoteClientInput = Mathf.Clamp(axis, -1f, 1f);
+                Endpoint = from,
+                Side = PongPlayer.PlayerRight,
+                LastInput = 0f,
+                LastPacketAt = Time.unscaledTime
+            };
+            remotePlayers[key] = player;
+        }
+
+        player.Endpoint = from;
+        player.LastPacketAt = Time.unscaledTime;
+        return player;
+    }
+
+    void RefreshHostSideAssignment(bool showAnnouncement)
+    {
+        if (PongNetworkSession.Instance == null)
+        {
+            return;
+        }
+
+        int count = GetPlayerCount(PongPlayer.PlayerLeft);
+        float share = count > 0 ? 1f / count : 1f;
+        PongNetworkSession.Instance.SetSideAssignment(PongPlayer.PlayerLeft, share, count, showAnnouncement);
+    }
+
+    void RefreshSideAssignments(PongPlayer side)
+    {
+        int count = GetPlayerCount(side);
+        if (count <= 0)
+        {
+            return;
+        }
+
+        float share = 1f / count;
+        string sideToken = side == PongPlayer.PlayerLeft ? "L" : "R";
+        string message = string.Join("|", new[]
+        {
+            "A",
+            sideToken,
+            share.ToString(CultureInfo.InvariantCulture),
+            count.ToString(CultureInfo.InvariantCulture)
+        }) + "\n";
+
+        foreach (RemotePlayer player in remotePlayers.Values)
+        {
+            if (player.Side == side)
+            {
+                udp.SendToEndpoint(message, player.Endpoint);
             }
         }
-        else if (message.StartsWith("R", System.StringComparison.Ordinal))
+
+        if (side == PongPlayer.PlayerLeft)
         {
-            ResetMatch(sendToClient: true);
+            RefreshHostSideAssignment(true);
         }
+    }
+
+    void SendSideAssignment(RemotePlayer player)
+    {
+        int count = GetPlayerCount(player.Side);
+        if (count <= 0)
+        {
+            count = 1;
+        }
+
+        float share = 1f / count;
+        string sideToken = player.Side == PongPlayer.PlayerLeft ? "L" : "R";
+        string message = string.Join("|", new[]
+        {
+            "A",
+            sideToken,
+            share.ToString(CultureInfo.InvariantCulture),
+            count.ToString(CultureInfo.InvariantCulture)
+        }) + "\n";
+
+        udp.SendToEndpoint(message, player.Endpoint);
+    }
+
+    void OnMessageReceived(string message, IPEndPoint from)
+    {
+        if (string.IsNullOrEmpty(message) || message.StartsWith("B|", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (message.StartsWith("R", StringComparison.Ordinal))
+        {
+            ResetMatch(true);
+            return;
+        }
+
+        string endpointKey = EndpointKey(from);
+        bool isNewRemote = !remotePlayers.ContainsKey(endpointKey);
+        PongPlayer assignedSide = PongPlayer.PlayerRight;
+        if (message.StartsWith("J", StringComparison.Ordinal) && isNewRemote)
+        {
+            assignedSide = PickBalancedSide();
+        }
+
+        RemotePlayer player = GetOrCreateRemotePlayer(from);
+        PongPlayer previousSide = player.Side;
+
+        if (message.StartsWith("J", StringComparison.Ordinal))
+        {
+            if (isNewRemote)
+            {
+                player.Side = assignedSide;
+                Debug.Log("[Server] Auto-assigned " + endpointKey + " to " + player.Side);
+            }
+
+            SendSideAssignment(player);
+
+            if (!matchActive && remotePlayers.Count > 0)
+            {
+                matchActive = true;
+                ResetMatch(true);
+            }
+            else if (isNewRemote || previousSide != player.Side || GetPlayerCount(player.Side) > 1)
+            {
+                RefreshSideAssignments(player.Side);
+                if (previousSide != player.Side)
+                {
+                    RefreshSideAssignments(previousSide);
+                }
+            }
+
+            return;
+        }
+
+        if (message.StartsWith("I|", StringComparison.Ordinal))
+        {
+            if (!matchActive && remotePlayers.Count > 0)
+            {
+                matchActive = true;
+                ResetMatch(true);
+            }
+
+            string[] parts = message.Split('|');
+            if (parts.Length >= 2 &&
+                float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float axis))
+            {
+                player.LastInput = Mathf.Clamp(axis, -1f, 1f);
+            }
+        }
+    }
+
+    public void OnCountdownFinished()
+    {
+        SetGameplayActive(matchActive);
+    }
+
+    UDPService EnsureUdp()
+    {
+        if (udp == null)
+        {
+            udp = GetComponent<UDPService>();
+        }
+
+        if (udp == null)
+        {
+            udp = gameObject.AddComponent<UDPService>();
+        }
+
+        return udp;
     }
 }

@@ -1,101 +1,51 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
-[DefaultExecutionOrder(-200)]
 public class PongNetworkSession : MonoBehaviour
 {
-    enum NetMode
-    {
-        Offline,
-        Host,
-        Client
-    }
+    public static PongNetworkSession Instance { get; private set; }
 
-    class RemotePlayer
-    {
-        public IPEndPoint Endpoint;
-        public PongPlayer Side;
-        public float LastInput;
-        public float LastPacketAt;
-    }
+    [Header("Managers")]
+    public PongServerManager ServerManager;
+    public PongClientManager ClientManager;
 
-    const int DefaultPort = 25000;
-    const float SendInterval = 0.02f;
-    const float ClientTimeout = 3f;
-    const float DiscoveryBeaconInterval = 1f;
-    const float DiscoveryStaleTime = 3f;
-    const float CountdownStepDuration = 1f;
-    const float CountdownGoDuration = 0.7f;
+    [Header("UI")]
+    public GameObject GameGameplayUI;
 
-    static PongNetworkSession _instance;
-
-    public static PongNetworkSession Instance => _instance;
-    public bool IsNetworkSession => mode != NetMode.Offline;
-    public bool IsInMenu => mode == NetMode.Offline;
-    public bool IsMatchActive => matchActive;
-    public bool IsCountdownActive => countdownActive;
-    public string CountdownText
-    {
-        get
-        {
-            if (!countdownActive)
-            {
-                return "";
-            }
-
-            return countdownShowingGo ? "GO!" : countdownNumber.ToString(CultureInfo.InvariantCulture);
-        }
-    }
-    public PongPlayer LocalSide => localSide;
-    public float LocalSpeedShare => localSpeedShare;
-    public int LocalSidePlayerCount => localSidePlayerCount;
-    public List<PongClientManager.ServerInfo> DiscoveredServers => discoveredServers;
+    readonly PongRoundFlow roundFlow = new PongRoundFlow();
 
     UDPService udp;
-
-    PongPaddle paddleLeft;
-    PongPaddle paddleRight;
-    PongBall ball;
-
-    readonly Dictionary<string, RemotePlayer> remotePlayers = new Dictionary<string, RemotePlayer>();
     readonly List<PongClientManager.ServerInfo> discoveredServers = new List<PongClientManager.ServerInfo>();
 
-    NetMode mode = NetMode.Offline;
-    string remoteIp = "127.0.0.1";
-    int port = DefaultPort;
-    float lastInputSentAt;
-    float lastStateSentAt;
-    float lastClientPacketAt;
-    float lastBeaconSentAt;
-    bool matchActive;
-    bool countdownActive;
-    bool countdownShowingGo;
-    int countdownNumber = 3;
-    float countdownNextStepAt;
-    string statusMessage = "";
-    int statesReceived;
-    int joinPacketsSent;
-    bool hostResponded;
+    public List<PongClientManager.ServerInfo> DiscoveredServers => discoveredServers;
 
-    PongPlayer joinSide = PongPlayer.PlayerRight;
-    PongPlayer localSide = PongPlayer.PlayerLeft;
-    float localSpeedShare = 1f;
-    int localSidePlayerCount = 1;
+    public bool IsMatchActive => (ServerManager != null && ServerManager.IsMatchActive) ||
+                                 (ClientManager != null && ClientManager.IsMatchActive);
 
-    string pendingAnnouncementPrimary = "";
-    string pendingAnnouncementSecondary = "";
-    bool hasPendingAnnouncement;
+    public bool IsConnectedToHost => ClientManager != null &&
+                                     ClientManager.gameObject.activeSelf &&
+                                     ClientManager.IsConnectedToHost;
+
+    public bool IsNetworkSession => IsHosting || IsClienting;
+
+    public bool IsHosting => ServerManager != null && ServerManager.gameObject.activeSelf;
+
+    public bool IsClienting => ClientManager != null && ClientManager.gameObject.activeSelf;
+
+    public bool IsInMenu => !IsNetworkSession;
+    public bool IsCountdownActive => roundFlow.IsCountdownActive;
+    public bool IsGameplayUnlocked => roundFlow.IsGameplayUnlocked(IsMatchActive);
+    public string CountdownText => roundFlow.CountdownText;
+    public PongPlayer LocalSide => roundFlow.LocalSide;
+    public float LocalSpeedShare => roundFlow.LocalSpeedShare;
+    public int LocalSidePlayerCount => roundFlow.LocalSidePlayerCount;
 
     public bool CanMovePaddle(PongPlayer player)
     {
-        if (mode == NetMode.Offline)
+        if (!IsNetworkSession)
         {
             return true;
         }
@@ -105,32 +55,33 @@ public class PongNetworkSession : MonoBehaviour
 
     public float GetPaddleSpeedMultiplier(PongPlayer player)
     {
-        if (mode == NetMode.Offline)
+        if (!IsNetworkSession)
         {
             return 1f;
         }
 
-        if (player != localSide)
-        {
-            return 0f;
-        }
-
-        return localSpeedShare;
+        return 0f;
     }
 
     public bool TryConsumeSideAnnouncement(out string primary, out string secondary)
     {
-        if (!hasPendingAnnouncement)
+        return roundFlow.TryConsumeAnnouncement(out primary, out secondary);
+    }
+
+    public void SetSideAssignment(PongPlayer side, float share, int count, bool showAnnouncement)
+    {
+        roundFlow.SetSideAssignment(side, share, count, showAnnouncement);
+    }
+
+    public void BeginRoundCountdown()
+    {
+        if (!IsNetworkSession)
         {
-            primary = "";
-            secondary = "";
-            return false;
+            return;
         }
 
-        primary = pendingAnnouncementPrimary;
-        secondary = pendingAnnouncementSecondary;
-        hasPendingAnnouncement = false;
-        return true;
+        roundFlow.BeginCountdown();
+        ApplyBallSimulation();
     }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -147,49 +98,48 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        if (_instance != null)
+        if (Instance != null)
         {
             return;
         }
 
         GameObject go = new GameObject("PongNetworkSession");
-        _instance = go.AddComponent<PongNetworkSession>();
+        go.AddComponent<PongNetworkSession>();
     }
 
     void Awake()
     {
-        if (_instance != null && _instance != this)
+        if (Instance != null && Instance != this)
         {
             Destroy(gameObject);
             return;
         }
 
-        _instance = this;
+        Instance = this;
         DontDestroyOnLoad(gameObject);
-        udp = gameObject.AddComponent<UDPService>();
+
+        udp = GetComponent<UDPService>();
+        if (udp == null) udp = gameObject.AddComponent<UDPService>();
+
         SceneManager.sceneLoaded += OnSceneLoaded;
-        CacheSceneRefs();
-        ConfigureForMode(NetMode.Offline);
+        EnsureManagers();
     }
 
     void OnDestroy()
     {
         SceneManager.sceneLoaded -= OnSceneLoaded;
-        if (_instance == this)
+        if (Instance == this)
         {
-            _instance = null;
+            Instance = null;
         }
     }
 
-    void OnSceneLoaded(Scene scene, LoadSceneMode loadMode)
+    void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
-        if (scene.name != "Pong")
+        if (scene.name == "Pong")
         {
-            return;
+            CacheRefsInManagers();
         }
-
-        CacheSceneRefs();
-        ApplyGameplayForCurrentMode();
     }
 
     void Update()
@@ -199,647 +149,76 @@ public class PongNetworkSession : MonoBehaviour
             return;
         }
 
-        if (paddleLeft == null || paddleRight == null || ball == null)
+        bool wasCountdown = roundFlow.IsCountdownActive;
+        roundFlow.UpdateCountdown();
+        if (wasCountdown && !roundFlow.IsCountdownActive)
         {
-            CacheSceneRefs();
-        }
-
-        UpdateCountdown();
-
-        if (mode == NetMode.Offline)
-        {
-            EnsureDiscoveryListener();
-            PruneStaleDiscoveredServers();
-        }
-        else if (mode == NetMode.Host)
-        {
-            SendDiscoveryBeacon();
-            RemoveStaleRemotePlayers();
-            UpdateHostMatchState();
-        }
-        else if (mode == NetMode.Client)
-        {
-            if (!udp.IsBound)
-            {
-                return;
-            }
-
-            if (matchActive && Time.time - lastClientPacketAt > ClientTimeout)
-            {
-                matchActive = false;
-                ApplyGameplayForCurrentMode();
-                statusMessage = "Deconnecte du host.";
-            }
-
-            SendClientInput();
-        }
-    }
-
-    void LateUpdate()
-    {
-        if (SceneManager.GetActiveScene().name != "Pong")
-        {
-            return;
-        }
-
-        if (paddleLeft == null || paddleRight == null || ball == null)
-        {
-            CacheSceneRefs();
-        }
-
-        if (mode != NetMode.Host || !matchActive || !HasSceneRefs())
-        {
-            return;
-        }
-
-        ApplyAggregatedPaddleMovement(PongPlayer.PlayerLeft, paddleLeft);
-        ApplyAggregatedPaddleMovement(PongPlayer.PlayerRight, paddleRight);
-        BroadcastState();
-    }
-
-    void ApplyAggregatedPaddleMovement(PongPlayer side, PongPaddle paddle)
-    {
-        int count = GetPlayerCount(side);
-        if (count <= 0 || paddle == null)
-        {
-            return;
-        }
-
-        float axis = GetAggregatedAxis(side);
-        float shareSpeed = paddle.Speed / count;
-        Vector3 pos = paddle.transform.position;
-        pos.y = Mathf.Clamp(
-            pos.y + axis * shareSpeed * Time.deltaTime,
-            paddle.MinY,
-            paddle.MaxY);
-        paddle.transform.position = pos;
-    }
-
-    float GetAggregatedAxis(PongPlayer side)
-    {
-        float axis = 0f;
-
-        if (mode == NetMode.Host && side == PongPlayer.PlayerLeft)
-        {
-            axis += ReadHostLeftInput();
-        }
-
-        foreach (RemotePlayer player in remotePlayers.Values)
-        {
-            if (player.Side == side)
-            {
-                axis += player.LastInput;
-            }
-        }
-
-        return axis;
-    }
-
-    static float ReadHostLeftInput()
-    {
-        float axis = 0f;
-        if (Keyboard.current == null)
-        {
-            return axis;
-        }
-
-        if (Keyboard.current.wKey.isPressed)
-        {
-            axis += 1f;
-        }
-
-        if (Keyboard.current.sKey.isPressed)
-        {
-            axis -= 1f;
-        }
-
-        return axis;
-    }
-
-    int GetPlayerCount(PongPlayer side)
-    {
-        int count = 0;
-
-        if (mode == NetMode.Host && side == PongPlayer.PlayerLeft)
-        {
-            count++;
-        }
-
-        foreach (RemotePlayer player in remotePlayers.Values)
-        {
-            if (player.Side == side)
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
-
-    void UpdateHostMatchState()
-    {
-        bool opponentConnected = udp.IsBound && remotePlayers.Count > 0 && HasAnyActiveRemotePlayer();
-
-        if (opponentConnected == matchActive)
-        {
-            return;
-        }
-
-        matchActive = opponentConnected;
-        if (matchActive)
-        {
-            statusMessage = "Adversaire(s) connecte(s). C'est parti !";
-            ResetMatch(sendToAll: true);
-        }
-        else
-        {
-            statusMessage = "En attente de joueurs...";
-            ApplyGameplayForCurrentMode();
-        }
-    }
-
-    bool HasAnyActiveRemotePlayer()
-    {
-        foreach (RemotePlayer player in remotePlayers.Values)
-        {
-            if (Time.time - player.LastPacketAt <= ClientTimeout)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    void RemoveStaleRemotePlayers()
-    {
-        var removedSides = new HashSet<PongPlayer>();
-        var keysToRemove = new List<string>();
-
-        foreach (KeyValuePair<string, RemotePlayer> entry in remotePlayers)
-        {
-            if (Time.time - entry.Value.LastPacketAt > ClientTimeout)
-            {
-                removedSides.Add(entry.Value.Side);
-                keysToRemove.Add(entry.Key);
-            }
-        }
-
-        if (keysToRemove.Count == 0)
-        {
-            return;
-        }
-
-        foreach (string key in keysToRemove)
-        {
-            remotePlayers.Remove(key);
-        }
-
-        foreach (PongPlayer side in removedSides)
-        {
-            RefreshSideAssignments(side);
-        }
-
-        if (remotePlayers.Count == 0)
-        {
-            matchActive = false;
-            statusMessage = "En attente de joueurs...";
-            ApplyGameplayForCurrentMode();
-        }
-    }
-
-    bool HasSceneRefs()
-    {
-        return paddleLeft != null && paddleRight != null && ball != null;
-    }
-
-    void OnDisable()
-    {
-        ShutdownNetwork();
-    }
-
-    public void SetJoinSide(PongPlayer side)
-    {
-        joinSide = side;
-    }
-
-    public void StartHost()
-    {
-        ShutdownNetwork();
-        remotePlayers.Clear();
-        discoveredServers.Clear();
-        lastClientPacketAt = 0f;
-
-        bool ok = udp.Bind(port, OnHostMessage);
-        if (!ok)
-        {
-            statusMessage = "Echec Start Host UDP port " + port + ": "
-                + (string.IsNullOrEmpty(udp.LastError) ? "port deja utilise ?" : udp.LastError);
-            ConfigureForMode(NetMode.Offline);
-            return;
-        }
-
-        localSide = PongPlayer.PlayerLeft;
-        matchActive = false;
-        statusMessage = "Host pret. Plusieurs joueurs peuvent rejoindre un cote.";
-        ConfigureForMode(NetMode.Host);
-        RefreshSideAssignments(PongPlayer.PlayerLeft);
-    }
-
-    public void StartClient(string ip)
-    {
-        remoteIp = ip != null ? ip.Trim() : "";
-        StartClientInternal();
-    }
-
-    void StartClientInternal()
-    {
-        remoteIp = remoteIp != null ? remoteIp.Trim() : "";
-
-        if (!IPAddress.TryParse(remoteIp, out _))
-        {
-            statusMessage = "IP invalide: " + remoteIp;
-            return;
-        }
-
-        if (remoteIp == "127.0.0.1")
-        {
-            statusMessage = "127.0.0.1 = local seulement. Sur 2 PC, mets l'IP LAN du host.";
-        }
-
-        ShutdownNetwork();
-        remotePlayers.Clear();
-        lastClientPacketAt = Time.time;
-        joinPacketsSent = 0;
-        hostResponded = false;
-        statesReceived = 0;
-        localSide = joinSide;
-
-        bool ok = udp.Bind(0, OnClientMessage);
-        if (!ok)
-        {
-            statusMessage = "Echec bind UDP client: " + udp.LastError;
-            ConfigureForMode(NetMode.Offline);
-            return;
-        }
-
-        SendJoinPacket();
-        statusMessage = "Client UDP vers " + remoteIp + ":" + port + " (" + SideLabel(joinSide) + ")";
-        matchActive = false;
-        ConfigureForMode(NetMode.Client);
-    }
-
-    void SendJoinPacket()
-    {
-        string sideToken = joinSide == PongPlayer.PlayerLeft ? "L" : "R";
-        udp.Send("J|" + sideToken + "\n", remoteIp, port);
-        joinPacketsSent++;
-        lastInputSentAt = Time.time;
-    }
-
-    public void RequestReplay()
-    {
-        if (mode == NetMode.Host)
-        {
-            ResetMatch(sendToAll: true);
-            return;
-        }
-
-        if (mode == NetMode.Client && udp.IsBound)
-        {
-            udp.Send("R\n", remoteIp, port);
-        }
-    }
-
-    void ResetMatch(bool sendToAll)
-    {
-        if (!HasSceneRefs())
-        {
-            CacheSceneRefs();
-            if (!HasSceneRefs())
-            {
-                return;
-            }
-        }
-
-        ball.ResetBall();
-        ResetPaddlePositions();
-
-        foreach (RemotePlayer player in remotePlayers.Values)
-        {
-            player.LastInput = 0f;
-        }
-
-        matchActive = mode == NetMode.Offline
-            || (mode == NetMode.Host && remotePlayers.Count > 0)
-            || (mode == NetMode.Client && udp.IsBound);
-
-        ApplyGameplayForCurrentMode();
-
-        if (mode == NetMode.Host)
-        {
-            RefreshSideAssignments(PongPlayer.PlayerLeft);
-            RefreshSideAssignments(PongPlayer.PlayerRight);
-        }
-
-        if (sendToAll && mode == NetMode.Host)
-        {
-            BroadcastToAllRemotes("R\n");
-            BroadcastState(force: true);
-        }
-
-        if (matchActive)
-        {
-            NotifyLocalSideAssignment();
-            BeginRoundCountdown();
-        }
-    }
-
-    void BeginRoundCountdown()
-    {
-        if (!IsNetworkSession)
-        {
-            return;
-        }
-
-        countdownActive = true;
-        countdownShowingGo = false;
-        countdownNumber = 3;
-        countdownNextStepAt = Time.time + CountdownStepDuration;
-        ApplyBallSimulation();
-    }
-
-    void UpdateCountdown()
-    {
-        if (!countdownActive || Time.time < countdownNextStepAt)
-        {
-            return;
-        }
-
-        if (countdownShowingGo)
-        {
-            countdownActive = false;
-            countdownShowingGo = false;
             ApplyBallSimulation();
-            return;
-        }
-
-        countdownNumber--;
-        if (countdownNumber <= 0)
-        {
-            countdownShowingGo = true;
-            countdownNextStepAt = Time.time + CountdownGoDuration;
-        }
-        else
-        {
-            countdownNextStepAt = Time.time + CountdownStepDuration;
-        }
-    }
-
-    void ApplyBallSimulation()
-    {
-        if (!HasSceneRefs())
-        {
-            return;
-        }
-
-        switch (mode)
-        {
-            case NetMode.Offline:
-                ball.SetSimulate(true);
-                break;
-            case NetMode.Host:
-                ball.SetSimulate(matchActive && !countdownActive);
-                break;
-            case NetMode.Client:
-                ball.SetSimulate(false);
-                break;
-        }
-    }
-
-    void ResetPaddlePositions()
-    {
-        Vector3 leftPos = paddleLeft.transform.position;
-        leftPos.y = 0f;
-        paddleLeft.transform.position = leftPos;
-
-        Vector3 rightPos = paddleRight.transform.position;
-        rightPos.y = 0f;
-        paddleRight.transform.position = rightPos;
-    }
-
-    static string[] GetLocalIPv4Addresses()
-    {
-        var preferred = new List<string>();
-        var others = new List<string>();
-
-        foreach (NetworkInterface networkInterface in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (networkInterface.OperationalStatus != OperationalStatus.Up)
+            if (ServerManager != null && ServerManager.gameObject.activeSelf)
             {
-                continue;
-            }
-
-            if (networkInterface.NetworkInterfaceType == NetworkInterfaceType.Loopback)
-            {
-                continue;
-            }
-
-            foreach (UnicastIPAddressInformation address in networkInterface.GetIPProperties().UnicastAddresses)
-            {
-                if (address.Address.AddressFamily != AddressFamily.InterNetwork)
-                {
-                    continue;
-                }
-
-                string ip = address.Address.ToString();
-                if (ip.StartsWith("169.254."))
-                {
-                    continue;
-                }
-
-                if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172."))
-                {
-                    preferred.Add(ip);
-                }
-                else
-                {
-                    others.Add(ip);
-                }
+                ServerManager.OnCountdownFinished();
             }
         }
 
-        if (preferred.Count > 0)
-        {
-            return preferred.ToArray();
-        }
-
-        if (others.Count > 0)
-        {
-            return others.ToArray();
-        }
-
-        return new[] { "IP introuvable" };
-    }
-
-    public void StopSession(bool showMenu = false)
-    {
-        countdownActive = false;
-        countdownShowingGo = false;
-        ShutdownNetwork();
-        matchActive = false;
-        remotePlayers.Clear();
-        discoveredServers.Clear();
-        ConfigureForMode(NetMode.Offline);
-
-        if (showMenu)
-        {
-            MenuController menu = UnityEngine.Object.FindAnyObjectByType<MenuController>();
-            menu?.ShowMainPanel();
-        }
-    }
-
-    void ShutdownNetwork()
-    {
-        if (udp != null && udp.IsBound)
-        {
-            udp.Close();
-        }
-    }
-
-    void ConfigureForMode(NetMode nextMode)
-    {
-        CacheSceneRefs();
-        if (!HasSceneRefs())
-        {
-            Debug.LogWarning("PongNetworkSession: scene refs missing, staying offline.");
-            mode = NetMode.Offline;
-            return;
-        }
-
-        mode = nextMode;
-
-        if (mode == NetMode.Host || mode == NetMode.Client)
-        {
-            matchActive = false;
-        }
-        else
-        {
-            matchActive = true;
-        }
-
-        ApplyGameplayForCurrentMode();
-
-        if (mode == NetMode.Offline)
+        if (IsInMenu)
         {
             EnsureDiscoveryListener();
+            discoveredServers.RemoveAll(s => Time.unscaledTime - s.LastSeen > 5f);
+        }
+        else
+        {
+            StopDiscoveryListener();
         }
     }
 
-    void EnsureDiscoveryListener()
+    void EnsureManagers()
     {
-        if (mode != NetMode.Offline || udp == null || udp.IsBound)
+        if (ServerManager == null) ServerManager = GetComponentInChildren<PongServerManager>(true);
+        if (ClientManager == null) ClientManager = GetComponentInChildren<PongClientManager>(true);
+
+        if (ServerManager == null)
         {
-            return;
+            GameObject serverGo = new GameObject("ServerManager");
+            serverGo.transform.SetParent(transform);
+            ServerManager = serverGo.AddComponent<PongServerManager>();
+            serverGo.SetActive(false);
         }
 
-        udp.Bind(port, OnDiscoveryMessage);
+        if (ClientManager == null)
+        {
+            GameObject clientGo = new GameObject("ClientManager");
+            clientGo.transform.SetParent(transform);
+            ClientManager = clientGo.AddComponent<PongClientManager>();
+            clientGo.SetActive(false);
+        }
+
+        CacheRefsInManagers();
     }
 
-    void OnDiscoveryMessage(string message, IPEndPoint from)
+    void CacheRefsInManagers()
     {
-        if (string.IsNullOrEmpty(message) || !message.StartsWith("B|", StringComparison.Ordinal))
+        PongPaddle left = FindPaddle(PongPlayer.PlayerLeft);
+        PongPaddle right = FindPaddle(PongPlayer.PlayerRight);
+        PongBall ball = GameObject.FindAnyObjectByType<PongBall>(FindObjectsInactive.Include);
+
+        if (ServerManager != null)
         {
-            return;
+            ServerManager.PaddleLeft = left;
+            ServerManager.PaddleRight = right;
+            ServerManager.Ball = ball;
         }
 
-        string[] parts = message.Split('|');
-        if (parts.Length < 2)
+        if (ClientManager != null)
         {
-            return;
+            ClientManager.PaddleLeft = left;
+            ClientManager.PaddleRight = right;
+            ClientManager.Ball = ball;
         }
-
-        string serverName = parts[1];
-        string hostIp = from.Address.ToString();
-        float now = Time.time;
-
-        for (int i = 0; i < discoveredServers.Count; i++)
-        {
-            if (discoveredServers[i].IP == hostIp)
-            {
-                discoveredServers[i] = new PongClientManager.ServerInfo
-                {
-                    Name = serverName,
-                    IP = hostIp,
-                    LastSeen = now
-                };
-                return;
-            }
-        }
-
-        discoveredServers.Add(new PongClientManager.ServerInfo
-        {
-            Name = serverName,
-            IP = hostIp,
-            LastSeen = now
-        });
-    }
-
-    void PruneStaleDiscoveredServers()
-    {
-        discoveredServers.RemoveAll(server => Time.time - server.LastSeen > DiscoveryStaleTime);
-    }
-
-    void SendDiscoveryBeacon()
-    {
-        if (!udp.IsBound || Time.time - lastBeaconSentAt < DiscoveryBeaconInterval)
-        {
-            return;
-        }
-
-        string message = "B|PongHost|" + port;
-        udp.Broadcast(message, port);
-        udp.Send(message, "127.0.0.1", port);
-        lastBeaconSentAt = Time.time;
-    }
-
-    void ApplyGameplayForCurrentMode()
-    {
-        if (!HasSceneRefs())
-        {
-            return;
-        }
-
-        switch (mode)
-        {
-            case NetMode.Offline:
-                paddleLeft.enabled = true;
-                paddleRight.enabled = true;
-                ball.SetSimulate(true);
-                break;
-            case NetMode.Host:
-                paddleLeft.enabled = false;
-                paddleRight.enabled = false;
-                ApplyBallSimulation();
-                break;
-            case NetMode.Client:
-                paddleLeft.enabled = false;
-                paddleRight.enabled = false;
-                ApplyBallSimulation();
-                break;
-        }
-    }
-
-    void CacheSceneRefs()
-    {
-        paddleLeft = FindPaddle(PongPlayer.PlayerLeft);
-        paddleRight = FindPaddle(PongPlayer.PlayerRight);
-        ball = GameObject.FindFirstObjectByType<PongBall>(FindObjectsInactive.Include);
     }
 
     PongPaddle FindPaddle(PongPlayer player)
     {
-        PongPaddle[] paddles = GameObject.FindObjectsByType<PongPaddle>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        PongPaddle[] paddles = GameObject.FindObjectsByType<PongPaddle>(FindObjectsInactive.Include);
         foreach (PongPaddle paddle in paddles)
         {
             if (paddle.Player == player)
@@ -851,357 +230,175 @@ public class PongNetworkSession : MonoBehaviour
         return null;
     }
 
-    void SendClientInput()
+    public void SetJoinSide(PongPlayer side)
     {
+        if (ClientManager != null)
+        {
+            ClientManager.SetJoinSide(side);
+        }
+    }
+
+    public void StartHost()
+    {
+        StopSession(false, false);
+        EnsureManagers();
+        roundFlow.Reset();
+
+        StopDiscoveryListener();
+
+        ServerManager.gameObject.SetActive(true);
+        ClientManager.gameObject.SetActive(false);
+        ServerManager.StartServer();
+        SetSideAssignment(PongPlayer.PlayerLeft, 1f, 1, true);
+        ApplyGameplayUI(true);
+    }
+
+    public void StartClient(string ip)
+    {
+        StopSession(false, false);
+        EnsureManagers();
+        roundFlow.Reset();
+
+        StopDiscoveryListener();
+
+        ServerManager.gameObject.SetActive(false);
+        ClientManager.gameObject.SetActive(true);
+        ClientManager.StartClient(ip);
+        ApplyGameplayUI(true);
+    }
+
+    public void StopSession(bool showMenu = true, bool clearNetworkState = true)
+    {
+        roundFlow.Reset();
+
+        if (ServerManager != null)
+        {
+            ServerManager.StopServer();
+            ServerManager.gameObject.SetActive(false);
+        }
+
+        if (ClientManager != null)
+        {
+            ClientManager.StopClient();
+            ClientManager.gameObject.SetActive(false);
+        }
+
+        StopDiscoveryListener();
+
+        if (clearNetworkState && GameNetworkManager.Instance != null)
+        {
+            GameNetworkManager.Instance.ClearState();
+        }
+
+        ApplyGameplayUI(false);
+        ApplyBallSimulation();
+
+        if (showMenu)
+        {
+            MenuController menu = FindAnyObjectByType<MenuController>();
+            menu?.ShowMainPanel();
+        }
+    }
+
+    void ApplyGameplayUI(bool active)
+    {
+        if (GameGameplayUI != null)
+        {
+            GameGameplayUI.SetActive(active);
+        }
+    }
+
+    public void RequestReplay()
+    {
+        if (ServerManager != null && ServerManager.gameObject.activeSelf)
+        {
+            ServerManager.ResetMatch(true);
+        }
+        else if (ClientManager != null && ClientManager.gameObject.activeSelf)
+        {
+            ClientManager.RequestReplay();
+        }
+    }
+
+    void OnHostMigrationTriggered()
+    {
+        Debug.Log("[NetworkSession] Migrating to Host...");
+        StartHost();
+    }
+
+    void ApplyBallSimulation()
+    {
+        PongBall ball = GameObject.FindAnyObjectByType<PongBall>(FindObjectsInactive.Include);
+        if (ball == null)
+        {
+            return;
+        }
+
+        if (!IsNetworkSession)
+        {
+            ball.SetSimulate(true);
+            return;
+        }
+
+        bool hostSimulate = ServerManager != null &&
+                            ServerManager.gameObject.activeSelf &&
+                            IsGameplayUnlocked &&
+                            IsMatchActive;
+        ball.SetSimulate(hostSimulate);
+    }
+
+    void EnsureDiscoveryListener()
+    {
+        if (udp == null)
+        {
+            udp = GetComponent<UDPService>();
+            if (udp == null)
+            {
+                udp = gameObject.AddComponent<UDPService>();
+            }
+        }
+
         if (!udp.IsBound)
         {
-            return;
-        }
-
-        if (Time.time - lastInputSentAt < SendInterval)
-        {
-            return;
-        }
-
-        if (!matchActive)
-        {
-            SendJoinPacket();
-            return;
-        }
-
-        float axis = 0f;
-        if (Keyboard.current != null)
-        {
-            if (Keyboard.current.upArrowKey.isPressed)
-            {
-                axis += 1f;
-            }
-
-            if (Keyboard.current.downArrowKey.isPressed)
-            {
-                axis -= 1f;
-            }
-        }
-
-        udp.Send("I|" + axis.ToString(CultureInfo.InvariantCulture) + "\n", remoteIp, port);
-        lastInputSentAt = Time.time;
-    }
-
-    void BroadcastState(bool force = false)
-    {
-        if (!udp.IsBound || !HasSceneRefs() || !matchActive || remotePlayers.Count == 0)
-        {
-            return;
-        }
-
-        if (!force && Time.time - lastStateSentAt < SendInterval)
-        {
-            return;
-        }
-
-        string message = string.Join("|", new[]
-        {
-            "S",
-            ball.transform.position.x.ToString("F4", CultureInfo.InvariantCulture),
-            ball.transform.position.y.ToString("F4", CultureInfo.InvariantCulture),
-            paddleLeft.transform.position.y.ToString("F4", CultureInfo.InvariantCulture),
-            paddleRight.transform.position.y.ToString("F4", CultureInfo.InvariantCulture),
-            ((int)ball.State).ToString(CultureInfo.InvariantCulture)
-        }) + "\n";
-
-        BroadcastToAllRemotes(message);
-        lastStateSentAt = Time.time;
-    }
-
-    void BroadcastToAllRemotes(string message)
-    {
-        foreach (RemotePlayer player in remotePlayers.Values)
-        {
-            udp.Send(message, player.Endpoint);
+            udp.Bind(PongNetworkPorts.DiscoveryPort, OnDiscoveryMessage);
         }
     }
 
-    static string EndpointKey(IPEndPoint endpoint)
+    void StopDiscoveryListener()
     {
-        return endpoint.Address.ToString() + ":" + endpoint.Port;
-    }
-
-    static bool TryParseSide(string token, out PongPlayer side)
-    {
-        side = PongPlayer.PlayerRight;
-        if (string.IsNullOrEmpty(token))
+        if (udp != null && udp.IsBound)
         {
-            return false;
-        }
-
-        if (token.Equals("L", StringComparison.OrdinalIgnoreCase))
-        {
-            side = PongPlayer.PlayerLeft;
-            return true;
-        }
-
-        if (token.Equals("R", StringComparison.OrdinalIgnoreCase))
-        {
-            side = PongPlayer.PlayerRight;
-            return true;
-        }
-
-        return false;
-    }
-
-    static string SideLabel(PongPlayer side)
-    {
-        return side == PongPlayer.PlayerLeft ? "GAUCHE" : "DROITE";
-    }
-
-    RemotePlayer GetOrCreateRemotePlayer(IPEndPoint from)
-    {
-        string key = EndpointKey(from);
-        if (!remotePlayers.TryGetValue(key, out RemotePlayer player))
-        {
-            player = new RemotePlayer
-            {
-                Endpoint = from,
-                Side = PongPlayer.PlayerRight,
-                LastInput = 0f,
-                LastPacketAt = Time.time
-            };
-            remotePlayers[key] = player;
-        }
-
-        player.Endpoint = from;
-        player.LastPacketAt = Time.time;
-        lastClientPacketAt = Time.time;
-        return player;
-    }
-
-    void RefreshSideAssignments(PongPlayer side)
-    {
-        int count = GetPlayerCount(side);
-        if (count <= 0)
-        {
-            return;
-        }
-
-        float share = 1f / count;
-        string sideToken = side == PongPlayer.PlayerLeft ? "L" : "R";
-        string message = string.Join("|", new[]
-        {
-            "A",
-            sideToken,
-            share.ToString(CultureInfo.InvariantCulture),
-            count.ToString(CultureInfo.InvariantCulture)
-        }) + "\n";
-
-        foreach (RemotePlayer player in remotePlayers.Values)
-        {
-            if (player.Side == side)
-            {
-                udp.Send(message, player.Endpoint);
-            }
-        }
-
-        if (mode == NetMode.Host && side == localSide)
-        {
-            localSpeedShare = share;
-            localSidePlayerCount = count;
-            NotifyLocalSideAssignment();
+            udp.CloseUDP();
         }
     }
 
-    void ApplyAssignmentFromHost(string message)
+    void OnDiscoveryMessage(string message, IPEndPoint source)
     {
-        string[] parts = message.Split('|');
-        if (parts.Length < 4 || parts[0] != "A")
+        if (!message.StartsWith("B|", StringComparison.Ordinal))
         {
-            return;
-        }
-
-        if (!TryParseSide(parts[1], out PongPlayer side))
-        {
-            return;
-        }
-
-        if (!float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float share))
-        {
-            return;
-        }
-
-        if (!int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out int count))
-        {
-            return;
-        }
-
-        localSide = side;
-        localSpeedShare = share;
-        localSidePlayerCount = count;
-        hostResponded = true;
-        statusMessage = "Assigne " + SideLabel(localSide);
-        NotifyLocalSideAssignment();
-    }
-
-    void NotifyLocalSideAssignment()
-    {
-        int percent = Mathf.RoundToInt(localSpeedShare * 100f);
-        pendingAnnouncementPrimary = "Tu es a " + SideLabel(localSide);
-        pendingAnnouncementSecondary = localSidePlayerCount + " joueur(s) sur ce cote - " + percent + "% de la vitesse";
-        hasPendingAnnouncement = true;
-    }
-
-    void OnHostMessage(string message, IPEndPoint from)
-    {
-        if (string.IsNullOrEmpty(message))
-        {
-            return;
-        }
-
-        if (message.StartsWith("B|", StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        if (message.StartsWith("R", StringComparison.Ordinal))
-        {
-            ResetMatch(sendToAll: true);
-            return;
-        }
-
-        RemotePlayer player = GetOrCreateRemotePlayer(from);
-        PongPlayer previousSide = player.Side;
-        bool sideChanged = false;
-
-        if (message.StartsWith("J", StringComparison.Ordinal))
-        {
-            PongPlayer requestedSide = PongPlayer.PlayerRight;
-            string[] joinParts = message.Split('|');
-            if (joinParts.Length >= 2)
-            {
-                TryParseSide(joinParts[1], out requestedSide);
-            }
-
-            sideChanged = player.Side != requestedSide;
-            player.Side = requestedSide;
-            SendSideAssignment(player);
-
-            if (!matchActive && remotePlayers.Count > 0)
-            {
-                matchActive = true;
-                statusMessage = "Joueur(s) connecte(s). C'est parti !";
-                ResetMatch(sendToAll: true);
-            }
-            else if (sideChanged || GetPlayerCount(player.Side) > 1)
-            {
-                RefreshSideAssignments(player.Side);
-                if (previousSide != player.Side)
-                {
-                    RefreshSideAssignments(previousSide);
-                }
-            }
-
-            return;
-        }
-
-        if (message.StartsWith("I|", StringComparison.Ordinal))
-        {
-            if (!matchActive && remotePlayers.Count > 0)
-            {
-                matchActive = true;
-                statusMessage = "Joueur(s) connecte(s). C'est parti !";
-                ResetMatch(sendToAll: true);
-            }
-
-            string[] parts = message.Split('|');
-            if (parts.Length >= 2 &&
-                float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float axis))
-            {
-                player.LastInput = Mathf.Clamp(axis, -1f, 1f);
-            }
-        }
-    }
-
-    void SendSideAssignment(RemotePlayer player)
-    {
-        int count = GetPlayerCount(player.Side);
-        if (count <= 0)
-        {
-            count = 1;
-        }
-
-        float share = 1f / count;
-        string sideToken = player.Side == PongPlayer.PlayerLeft ? "L" : "R";
-        string message = string.Join("|", new[]
-        {
-            "A",
-            sideToken,
-            share.ToString(CultureInfo.InvariantCulture),
-            count.ToString(CultureInfo.InvariantCulture)
-        }) + "\n";
-
-        udp.Send(message, player.Endpoint);
-    }
-
-    void OnClientMessage(string message, IPEndPoint from)
-    {
-        if (string.IsNullOrEmpty(message))
-        {
-            return;
-        }
-
-        lastClientPacketAt = Time.time;
-
-        if (message.StartsWith("A", StringComparison.Ordinal))
-        {
-            ApplyAssignmentFromHost(message);
-            return;
-        }
-
-        if (message.StartsWith("R", StringComparison.Ordinal))
-        {
-            matchActive = true;
-            ResetMatch(sendToAll: false);
             return;
         }
 
         string[] parts = message.Split('|');
-        if (parts.Length < 6 || parts[0] != "S")
+        if (parts.Length < 2)
         {
             return;
         }
 
-        matchActive = true;
-        statesReceived++;
-        statusMessage = "En jeu";
+        string name = parts[1];
+        string ip = source.Address.ToString();
+        float now = Time.unscaledTime;
 
-        if (!float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float ballX) ||
-            !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float ballY) ||
-            !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float leftY) ||
-            !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float rightY) ||
-            !int.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out int stateInt))
+        for (int i = 0; i < discoveredServers.Count; i++)
         {
-            Debug.LogWarning("PongNetworkSession: invalid state message: " + message);
-            return;
-        }
-
-        if (paddleLeft == null || paddleRight == null || ball == null)
-        {
-            CacheSceneRefs();
-            if (!HasSceneRefs())
+            if (discoveredServers[i].IP == ip)
             {
+                discoveredServers[i] = new PongClientManager.ServerInfo { Name = name, IP = ip, LastSeen = now };
                 return;
             }
         }
 
-        Vector3 leftPos = paddleLeft.transform.position;
-        leftPos.y = leftY;
-        paddleLeft.transform.position = leftPos;
-
-        Vector3 rightPos = paddleRight.transform.position;
-        rightPos.y = rightY;
-        paddleRight.transform.position = rightPos;
-
-        PongBallState state = Enum.IsDefined(typeof(PongBallState), stateInt)
-            ? (PongBallState)stateInt
-            : PongBallState.Playing;
-        ball.ApplyNetworkState(new Vector3(ballX, ballY, ball.transform.position.z), state);
+        discoveredServers.Add(new PongClientManager.ServerInfo { Name = name, IP = ip, LastSeen = now });
+        Debug.Log("[Discovery] Found server: " + name + " at " + ip);
     }
 }

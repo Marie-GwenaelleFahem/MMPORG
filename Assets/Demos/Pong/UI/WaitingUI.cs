@@ -1,33 +1,26 @@
 using UnityEngine;
 using TMPro;
 
-/// <summary>
-/// This script manages the "Waiting" overlay that appears when a host is
-/// waiting for a client to connect. It also pauses the game logic.
-/// </summary>
 public class WaitingUI : MonoBehaviour
 {
     [Header("UI Elements")]
-    public GameObject WaitingPanel; // The panel to show/hide
-    public TMP_Text StatusText;     // The text showing connection status
+    public GameObject WaitingPanel;
+    public TMP_Text StatusText;
 
     private void Awake()
     {
-        // 1. If not assigned, try to find a child named "WaitingPanel"
         if (WaitingPanel == null)
         {
             Transform found = transform.Find("WaitingPanel");
             if (found != null) WaitingPanel = found.gameObject;
         }
 
-        // 2. If still not found, search the whole scene
         if (WaitingPanel == null)
         {
             GameObject globalFound = GameObject.Find("WaitingPanel");
             if (globalFound != null) WaitingPanel = globalFound.gameObject;
         }
 
-        // 3. Link the status text automatically
         if (StatusText == null && WaitingPanel != null)
         {
             StatusText = WaitingPanel.GetComponentInChildren<TMP_Text>(true);
@@ -35,7 +28,7 @@ public class WaitingUI : MonoBehaviour
 
         if (WaitingPanel == null)
         {
-            Debug.LogError("[WaitingUI] CRITICAL: No object named 'WaitingPanel' found in this scene! Please create one in the UI.");
+            Debug.LogError("[WaitingUI] CRITICAL: No object named 'WaitingPanel' found in this scene!");
         }
         else
         {
@@ -45,28 +38,26 @@ public class WaitingUI : MonoBehaviour
 
     private void OnEnable()
     {
-        // Hide on start just in case, logic will turn it on in Update
         if (WaitingPanel != null) WaitingPanel.SetActive(false);
     }
 
     private void Update()
     {
-        // Safety check for the singletons
         if (GameNetworkManager.Instance == null || PongNetworkSession.Instance == null) return;
 
-        // Determine if we are "Waiting"
-        // 1. We are the Host but no client is connected
-        bool isHostWaiting = GameNetworkManager.Instance.IsHost && !GameNetworkManager.Instance.IsClientConnected;
+        bool isHosting = PongNetworkSession.Instance.IsHosting;
+        bool isClienting = PongNetworkSession.Instance.IsClienting;
 
-        // 2. We are the Client but we haven't successfully synced with the host yet
-        // (This handles the case where the host crashes or leaves during the match)
-        bool isClientWaiting = !GameNetworkManager.Instance.IsHost && !GameNetworkManager.Instance.IsClientConnected && !PongNetworkSession.Instance.IsInMenu;
+        bool isHostWaiting = isHosting && !PongNetworkSession.Instance.IsMatchActive;
+        bool isClientDisconnected = isClienting && !PongNetworkSession.Instance.IsConnectedToHost;
+        bool isClientWaitingForStart = isClienting && PongNetworkSession.Instance.IsConnectedToHost &&
+                                       !PongNetworkSession.Instance.IsMatchActive;
 
-        bool shouldShow = isHostWaiting || isClientWaiting;
+        bool shouldFreezeGame = isHostWaiting || isClientDisconnected;
+        bool shouldDisplayWaitingPanel = shouldFreezeGame || isClientWaitingForStart;
 
-        if (shouldShow)
+        if (shouldDisplayWaitingPanel)
         {
-            // Show the waiting panel
             if (WaitingPanel != null)
             {
                 if (!WaitingPanel.activeSelf)
@@ -76,11 +67,23 @@ public class WaitingUI : MonoBehaviour
                 }
 
                 if (StatusText != null)
-                    StatusText.text = isHostWaiting ? "En attente d'un deuxième joueur......" : "Connection au host perdue...";
+                {
+                    if (isHostWaiting)
+                    {
+                        StatusText.text = "En attente d'un deuxième joueur......";
+                    }
+                    else if (isClientWaitingForStart)
+                    {
+                        StatusText.text = "Connecte au host. En attente du demarrage...";
+                    }
+                    else
+                    {
+                        StatusText.text = "Connection au host perdue...";
+                    }
+                }
             }
 
-            // Freeze the game while waiting
-            Time.timeScale = 0;
+            Time.timeScale = shouldFreezeGame ? 0f : 1f;
         }
         else
         {
@@ -89,7 +92,8 @@ public class WaitingUI : MonoBehaviour
             {
                 Debug.Log("[WaitingUI] DEACTIVATE: Match is active.");
                 WaitingPanel.SetActive(false);
-                Time.timeScale = 1; // Resume game
+                // Resume the game
+                Time.timeScale = 1;
             }
         }
     }

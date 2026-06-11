@@ -1,8 +1,6 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
-/// <summary>
-/// Affiche un bandeau au centre de l'ecran indiquant le cote assigne et la part de vitesse.
-/// </summary>
 public class PongSideAssignmentUI : MonoBehaviour
 {
     const float DisplayDuration = 4f;
@@ -14,7 +12,7 @@ public class PongSideAssignmentUI : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
     {
-        if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "Pong")
+        if (SceneManager.GetActiveScene().name != "Pong")
         {
             return;
         }
@@ -39,18 +37,18 @@ public class PongSideAssignmentUI : MonoBehaviour
         {
             line1 = primary;
             line2 = secondary;
-            hideAt = Time.time + DisplayDuration;
+            hideAt = Time.unscaledTime + DisplayDuration;
         }
     }
 
     void OnGUI()
     {
-        if (Time.time >= hideAt || string.IsNullOrEmpty(line1))
+        if (Time.unscaledTime >= hideAt || string.IsNullOrEmpty(line1))
         {
             return;
         }
 
-        if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "Pong")
+        if (SceneManager.GetActiveScene().name != "Pong")
         {
             return;
         }
