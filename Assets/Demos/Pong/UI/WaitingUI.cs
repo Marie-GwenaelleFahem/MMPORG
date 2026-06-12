@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.UI;
 using TMPro;
 
 public class WaitingUI : MonoBehaviour
@@ -6,6 +7,7 @@ public class WaitingUI : MonoBehaviour
     [Header("UI Elements")]
     public GameObject WaitingPanel;
     public TMP_Text StatusText;
+    public Button ReturnToMenuButton;
 
     private void Awake()
     {
@@ -23,7 +25,11 @@ public class WaitingUI : MonoBehaviour
 
         if (StatusText == null && WaitingPanel != null)
         {
-            StatusText = WaitingPanel.GetComponentInChildren<TMP_Text>(true);
+            Transform statusTransform = WaitingPanel.transform.Find("StatusText");
+            if (statusTransform != null)
+            {
+                StatusText = statusTransform.GetComponent<TMP_Text>();
+            }
         }
 
         if (WaitingPanel == null)
@@ -34,6 +40,8 @@ public class WaitingUI : MonoBehaviour
         {
             Debug.Log("[WaitingUI] Successfully initialized and linked to: " + WaitingPanel.name);
         }
+
+        SetupReturnToMenuButton();
     }
 
     private void OnEnable()
@@ -74,11 +82,11 @@ public class WaitingUI : MonoBehaviour
                     }
                     else if (isClientWaitingForStart)
                     {
-                        StatusText.text = "Connecte au host. En attente du demarrage...";
+                        StatusText.text = "Connecté au host. En attente du démarrage...";
                     }
                     else
                     {
-                        StatusText.text = "Connection au host perdue...";
+                        StatusText.text = "Connexion au host perdue...";
                     }
                 }
             }
@@ -87,14 +95,99 @@ public class WaitingUI : MonoBehaviour
         }
         else
         {
-            // Hide the waiting panel when everything is fine
             if (WaitingPanel != null && WaitingPanel.activeSelf)
             {
                 Debug.Log("[WaitingUI] DEACTIVATE: Match is active.");
                 WaitingPanel.SetActive(false);
-                // Resume the game
                 Time.timeScale = 1;
             }
         }
+    }
+
+    public void OnReturnToMenu()
+    {
+        Time.timeScale = 1f;
+
+        if (WaitingPanel != null)
+        {
+            WaitingPanel.SetActive(false);
+        }
+
+        PongNetworkSession.Instance?.StopSession(true);
+    }
+
+    void SetupReturnToMenuButton()
+    {
+        if (WaitingPanel == null)
+        {
+            return;
+        }
+
+        if (ReturnToMenuButton == null)
+        {
+            Transform existing = WaitingPanel.transform.Find("ButtonReturnToMenu");
+            if (existing != null)
+            {
+                ReturnToMenuButton = existing.GetComponent<Button>();
+            }
+        }
+
+        if (ReturnToMenuButton == null)
+        {
+            ReturnToMenuButton = CreateReturnToMenuButton();
+        }
+
+        if (ReturnToMenuButton == null)
+        {
+            return;
+        }
+
+        ReturnToMenuButton.onClick.RemoveListener(OnReturnToMenu);
+        ReturnToMenuButton.onClick.AddListener(OnReturnToMenu);
+    }
+
+    Button CreateReturnToMenuButton()
+    {
+        var buttonObject = new GameObject(
+            "ButtonReturnToMenu",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Image),
+            typeof(Button)
+        );
+        buttonObject.transform.SetParent(WaitingPanel.transform, false);
+
+        var rect = buttonObject.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = new Vector2(0f, -80f);
+        rect.sizeDelta = new Vector2(280f, 40f);
+
+        var image = buttonObject.GetComponent<Image>();
+        image.color = Color.white;
+        image.sprite = Resources.GetBuiltinResource<Sprite>("UI/Skin/UISprite.psd");
+
+        var textObject = new GameObject("Text (TMP)", typeof(RectTransform));
+        textObject.transform.SetParent(buttonObject.transform, false);
+
+        var textRect = textObject.GetComponent<RectTransform>();
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = Vector2.zero;
+        textRect.offsetMax = Vector2.zero;
+
+        var label = textObject.AddComponent<TextMeshProUGUI>();
+        label.text = "Retour menu principal";
+        label.fontSize = 18f;
+        label.alignment = TextAlignmentOptions.Center;
+        label.color = new Color(0.2f, 0.2f, 0.2f, 1f);
+        if (StatusText != null)
+        {
+            label.font = StatusText.font;
+        }
+
+        var button = buttonObject.GetComponent<Button>();
+        button.targetGraphic = image;
+        return button;
     }
 }
