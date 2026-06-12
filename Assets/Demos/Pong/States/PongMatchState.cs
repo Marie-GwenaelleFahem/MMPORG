@@ -1,11 +1,34 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using UnityEngine;
 
-/* Data container for the current state of a Pong match.
- * This class handles serialization and deserialization of the game state 
- * into strings for network transmission.
-*/
+[Serializable]
+public class PlayerNetData
+{
+    public string Name;
+    public string ColorHex;
+    public int Side; // 1 = Left, 2 = Right
+
+    public override string ToString()
+    {
+        return $"{Name},{ColorHex},{Side}";
+    }
+
+    public static PlayerNetData FromString(string data)
+    {
+        string[] parts = data.Split(',');
+        if (parts.Length < 3) return null;
+        return new PlayerNetData
+        {
+            Name = parts[0],
+            ColorHex = parts[1],
+            Side = int.Parse(parts[2], CultureInfo.InvariantCulture)
+        };
+    }
+}
+
 [Serializable]
 public class PongMatchState
 {
@@ -14,10 +37,12 @@ public class PongMatchState
     public float PaddleLeftY;
     public float PaddleRightY;
     public PongBallState BallState;
+    public float Countdown;
+    public List<PlayerNetData> Players = new List<PlayerNetData>();
 
-    // Converts the current state into a network-ready string.
     public override string ToString()
     {
+        string playersStr = string.Join(";", Players.Select(p => p.ToString()));
         return string.Join("|", new[]
         {
             "S",
@@ -25,17 +50,18 @@ public class PongMatchState
             BallY.ToString("F4", CultureInfo.InvariantCulture),
             PaddleLeftY.ToString("F4", CultureInfo.InvariantCulture),
             PaddleRightY.ToString("F4", CultureInfo.InvariantCulture),
-            ((int)BallState).ToString(CultureInfo.InvariantCulture)
+            ((int)BallState).ToString(CultureInfo.InvariantCulture),
+            Countdown.ToString("F2", CultureInfo.InvariantCulture),
+            playersStr
         });
     }
 
-    // Populates this state object from a network string.
     public bool FromString(string message)
     {
         if (string.IsNullOrEmpty(message)) return false;
 
         string[] parts = message.Split('|');
-        if (parts.Length < 6 || parts[0] != "S") return false;
+        if (parts.Length < 8 || parts[0] != "S") return false;
 
         try
         {
@@ -48,6 +74,19 @@ public class PongMatchState
             BallState = Enum.IsDefined(typeof(PongBallState), stateInt)
                 ? (PongBallState)stateInt
                 : PongBallState.Playing;
+
+            Countdown = float.Parse(parts[6], NumberStyles.Float, CultureInfo.InvariantCulture);
+
+            Players.Clear();
+            if (!string.IsNullOrEmpty(parts[7]))
+            {
+                string[] playerParts = parts[7].Split(';');
+                foreach (string p in playerParts)
+                {
+                    var data = PlayerNetData.FromString(p);
+                    if (data != null) Players.Add(data);
+                }
+            }
 
             return true;
         }

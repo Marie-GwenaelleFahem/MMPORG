@@ -25,15 +25,15 @@ public class PongNetworkSession : MonoBehaviour
     public bool IsMatchActive => (ServerManager != null && ServerManager.IsMatchActive) ||
                                  (ClientManager != null && ClientManager.IsMatchActive);
 
-    public bool IsConnectedToHost => ClientManager != null &&
-                                     ClientManager.gameObject.activeSelf &&
-                                     ClientManager.IsConnectedToHost;
-
-    public bool IsNetworkSession => IsHosting || IsClienting;
+    // Returns true if we are in a network session (either as host or client).
+    public bool IsNetworkSession => (ServerManager != null && ServerManager.gameObject.activeSelf) ||
+                                    (ClientManager != null && ClientManager.gameObject.activeSelf);
 
     public bool IsHosting => ServerManager != null && ServerManager.gameObject.activeSelf;
-
     public bool IsClienting => ClientManager != null && ClientManager.gameObject.activeSelf;
+    public bool IsConnectedToHost => ClientManager != null && ClientManager.IsConnectedToHost;
+
+    public List<PlayerNetData> Players => IsHosting ? ServerManager.GetAllPlayersData() : (IsClienting ? ClientManager.Players : new List<PlayerNetData>());
 
     public bool IsInMenu => !IsNetworkSession;
     public bool IsCountdownActive => roundFlow.IsCountdownActive;

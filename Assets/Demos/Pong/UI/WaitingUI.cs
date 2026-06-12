@@ -53,8 +53,11 @@ public class WaitingUI : MonoBehaviour
         bool isClientWaitingForStart = isClienting && PongNetworkSession.Instance.IsConnectedToHost &&
                                        !PongNetworkSession.Instance.IsMatchActive;
 
-        bool shouldFreezeGame = isHostWaiting || isClientDisconnected;
-        bool shouldDisplayWaitingPanel = shouldFreezeGame || isClientWaitingForStart;
+        bool isCountingDown = PongNetworkSession.Instance.IsCountdownActive;
+        string countdownText = PongNetworkSession.Instance.CountdownText;
+
+        bool shouldFreezeGame = (isHostWaiting || isClientDisconnected) && !isCountingDown;
+        bool shouldDisplayWaitingPanel = shouldFreezeGame || isClientWaitingForStart || isCountingDown;
 
         if (shouldDisplayWaitingPanel)
         {
@@ -68,7 +71,11 @@ public class WaitingUI : MonoBehaviour
 
                 if (StatusText != null)
                 {
-                    if (isHostWaiting)
+                    if (isCountingDown)
+                    {
+                        StatusText.text = countdownText == "GO!" ? "C'EST PARTI !" : $"Le jeu commence dans {countdownText}";
+                    }
+                    else if (isHostWaiting)
                     {
                         StatusText.text = "En attente d'un deuxième joueur......";
                     }

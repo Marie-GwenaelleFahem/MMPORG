@@ -4,15 +4,18 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Linq;
 using UnityEngine;
 public class PongServerManager : MonoBehaviour
 {
     class RemotePlayer
     {
+        public string Name;
         public IPEndPoint Endpoint;
         public PongPlayer Side;
         public float LastInput;
         public float LastPacketAt;
+        public string ColorHex;
     }
 
     [Header("Network Settings")]
@@ -27,6 +30,7 @@ public class PongServerManager : MonoBehaviour
     public PongBall Ball;
 
     readonly Dictionary<string, RemotePlayer> remotePlayers = new Dictionary<string, RemotePlayer>();
+    RemotePlayer hostPlayerData;
 
     UDPService udp;
     UdpClient beaconSender;
@@ -35,6 +39,20 @@ public class PongServerManager : MonoBehaviour
     bool matchActive;
 
     public bool IsMatchActive => matchActive;
+    public bool IsCountingDown => PongNetworkSession.Instance != null && PongNetworkSession.Instance.IsCountdownActive;
+    public float CountdownRemaining => IsCountingDown ? 1f : 0f; // Simplified as the round flow handles the details
+    
+    public List<PlayerNetData> GetAllPlayersData()
+    {
+        var list = new List<PlayerNetData>();
+        if (hostPlayerData != null) list.Add(new PlayerNetData { Name = hostPlayerData.Name, ColorHex = hostPlayerData.ColorHex, Side = (int)hostPlayerData.Side });
+        
+        // Sort remote players by name for a stable UI list
+        var sortedRemotes = remotePlayers.Values.OrderBy(p => p.Name).ToList();
+        foreach (var p in sortedRemotes) list.Add(new PlayerNetData { Name = p.Name, ColorHex = p.ColorHex, Side = (int)p.Side });
+        
+        return list;
+    }
 
     public void StartServer()
     {
@@ -47,8 +65,27 @@ public class PongServerManager : MonoBehaviour
 
         matchActive = false;
         remotePlayers.Clear();
+        
+        hostPlayerData = new RemotePlayer {
+            Name = "Host (P1)",
+            Side = PongPlayer.PlayerLeft,
+            ColorHex = "#" + ColorUtility.ToHtmlStringRGB(UnityEngine.Random.ColorHSV(0f, 1f, 0.7f, 1f, 0.7f, 1f))
+        };
+
         Debug.Log("[Server] Started listening on port " + ListenPort);
+        ApplyColors();
         RefreshHostSideAssignment(false);
+    }
+
+    private void ApplyColors()
+    {
+        // Deterministic color: always use the host for left, and the first remote (alphabetically) for right
+        if (hostPlayerData != null && ColorUtility.TryParseHtmlString(hostPlayerData.ColorHex, out Color cl)) 
+            PaddleLeft.SetColor(cl);
+
+        var firstRight = remotePlayers.Values.Where(p => p.Side == PongPlayer.PlayerRight).OrderBy(p => p.Name).FirstOrDefault();
+        if (firstRight != null && ColorUtility.TryParseHtmlString(firstRight.ColorHex, out Color cr))
+            PaddleRight.SetColor(cr);
     }
 
     public void StopServer()
@@ -79,6 +116,14 @@ public class PongServerManager : MonoBehaviour
         if (!matchActive)
         {
             return;
+        }
+
+        // Goal Detection
+        if (Ball.State == PongBallState.PlayerLeftWin || Ball.State == PongBallState.PlayerRightWin)
+        {
+            // Reset ball state immediately to avoid flickers on client
+            Ball.ApplyNetworkState(Ball.transform.position, PongBallState.Playing);
+            ResetMatch(true);
         }
 
         ApplyAggregatedPaddleMovement(PongPlayer.PlayerLeft, PaddleLeft);
@@ -315,7 +360,9 @@ public class PongServerManager : MonoBehaviour
             BallY = Ball.transform.position.y,
             PaddleLeftY = PaddleLeft.transform.position.y,
             PaddleRightY = PaddleRight.transform.position.y,
-            BallState = Ball.State
+            BallState = Ball.State,
+            Countdown = CountdownRemaining,
+            Players = GetAllPlayersData()
         };
 
         BroadcastToAll(state.ToString() + "\n");
@@ -422,12 +469,15 @@ public class PongServerManager : MonoBehaviour
         {
             player = new RemotePlayer
             {
+                Name = "Client " + (remotePlayers.Count + 1),
                 Endpoint = from,
                 Side = PongPlayer.PlayerRight,
                 LastInput = 0f,
-                LastPacketAt = Time.unscaledTime
+                LastPacketAt = Time.unscaledTime,
+                ColorHex = "#" + ColorUtility.ToHtmlStringRGB(UnityEngine.Random.ColorHSV(0f, 1f, 0.7f, 1f, 0.7f, 1f))
             };
             remotePlayers[key] = player;
+            ApplyColors(); // Refresh paddle colors when a new player joins
         }
 
         player.Endpoint = from;

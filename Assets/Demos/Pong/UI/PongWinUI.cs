@@ -1,4 +1,5 @@
 using UnityEngine;
+using System;
 using UnityEngine.SceneManagement;
 
 public class PongWinUI : MonoBehaviour
@@ -52,6 +53,7 @@ public class PongWinUI : MonoBehaviour
         Panel.SetActive(true);
         PlayerLeft.SetActive(true);
         PlayerRight.SetActive(false); // Hide the other one just in case
+        Debug.Log($"[WinUI] Team Left Wins!");
         break;
 
       case PongBallState.PlayerRightWin:
@@ -59,6 +61,7 @@ public class PongWinUI : MonoBehaviour
         Panel.SetActive(true);
         PlayerLeft.SetActive(false); // Hide the other one just in case
         PlayerRight.SetActive(true);
+        Debug.Log($"[WinUI] Team Right Wins!");
         break;
     }
   }

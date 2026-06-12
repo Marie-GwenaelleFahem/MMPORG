@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Net;
 using UnityEngine;
 public class PongClientManager : MonoBehaviour
@@ -24,8 +26,10 @@ public class PongClientManager : MonoBehaviour
     float lastHostPacketAt;
     bool matchActive;
     bool hostResponded;
+    private List<PlayerNetData> players = new List<PlayerNetData>();
 
     public bool IsMatchActive => matchActive;
+    public List<PlayerNetData> Players => players;
 
     public bool IsConnectedToHost => udp != null && udp.IsBound && hostResponded && (
         !matchActive || Time.unscaledTime - lastHostPacketAt <= HostTimeout);
@@ -188,6 +192,9 @@ public class PongClientManager : MonoBehaviour
 
     void ApplyState(PongMatchState state)
     {
+        players = state.Players;
+        ApplyColors();
+
         PaddleLeft.transform.position = new Vector3(PaddleLeft.transform.position.x, state.PaddleLeftY, PaddleLeft.transform.position.z);
         PaddleRight.transform.position = new Vector3(PaddleRight.transform.position.x, state.PaddleRightY, PaddleRight.transform.position.z);
         Ball.ApplyNetworkState(new Vector3(state.BallX, state.BallY, Ball.transform.position.z), state.BallState);
@@ -206,5 +213,16 @@ public class PongClientManager : MonoBehaviour
         }
 
         return udp;
+    }
+
+    private void ApplyColors()
+    {
+        var firstLeft = players.FirstOrDefault(p => p.Side == (int)PongPlayer.PlayerLeft);
+        if (firstLeft != null && ColorUtility.TryParseHtmlString(firstLeft.ColorHex, out Color cl)) 
+            PaddleLeft.SetColor(cl);
+
+        var firstRight = players.FirstOrDefault(p => p.Side == (int)PongPlayer.PlayerRight);
+        if (firstRight != null && ColorUtility.TryParseHtmlString(firstRight.ColorHex, out Color cr)) 
+            PaddleRight.SetColor(cr);
     }
 }

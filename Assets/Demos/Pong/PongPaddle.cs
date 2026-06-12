@@ -46,6 +46,15 @@ public class PongPaddle : MonoBehaviour
         }
     }
 
+    public void SetColor(Color color)
+    {
+        Renderer r = GetComponent<Renderer>();
+        if (r != null)
+        {
+            r.material.color = color;
+        }
+    }
+
     // Update is called once per frame
     void Update()
     {
